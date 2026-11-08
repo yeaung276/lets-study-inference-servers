@@ -1,0 +1,3 @@
+[submodule "references/DeepInfer"]
+	path = references/DeepInfer
+	url = https://github.com/deepseek-ai/DeepInfer.git
