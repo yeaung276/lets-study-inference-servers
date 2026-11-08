@@ -1,0 +1,654 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DeepInfer</title>
+  <meta name="nav-order" content="1">
+  <link rel="stylesheet" href="/assets/docs.css">
+  <script src="/assets/docs.js"></script>
+</head>
+<body>
+  <main>
+    <h1>DeepInfer</h1>
+    <p class="lead">How DeepSeek's inference engine is put together, from the system around it down to the parts that run every step.</p>
+
+    <!-- ============================================================ -->
+    <section id="overview">
+      <h2>Architectural overview</h2>
+      <p>
+        DeepInfer is the inference engine behind DeepSeek's production service, released as an
+        <strong>offline</strong> engine for <code>DeepSeek-V4.1-Flash</code>. You give it prompts and
+        <code>SamplingParams</code>, and it returns generated tokens. It started as a fork of vLLM and keeps that
+        shape: a Python <code>LLM</code> wrapper, an <code>LLMEngine</code> that runs one scheduling step at a time,
+        and a worker that runs the model on the GPU. The scheduler, block allocator and input preparation were moved to
+        C++ (<code>csrc/engine</code>), and almost every kernel comes from DeepSeek's own libraries.
+      </p>
+      <p>Three ideas explain most of the design:</p>
+      <ol>
+        <li>
+          <strong>One engine per data-parallel (DP) rank.</strong> A launcher starts one process per DP rank. Each
+          process has its own scheduler and KV cache, and serves its own requests. Ranks only meet inside the model
+          (<a href="/concepts#moe-expert-all-to-all">MoE expert all-to-all</a>) and in a small vote that keeps every rank on the same step type (prefill or decode).
+        </li>
+        <li>
+          <strong>The CPU never waits for the GPU.</strong> Under zero-overhead scheduling (<a href="/concepts#zos">ZOS</a>), the CPU post-processes
+          step <em>N−1</em> and schedules step <em>N+1</em> while the GPU runs step <em>N</em>. Decode steps replay
+          captured CUDA graphs, and the hot path refuses any <code>cuda synchronize</code>.
+        </li>
+        <li>
+          <strong>Production pieces stay outside.</strong> The load balancers, KV cache storage (3FS) and the
+          prefill/decode split live outside this release. The engine still has the hooks for them
+          (<code>EngineType.PROMPT</code> / <code>COMPLETION</code>, <code>pe_do_save_kvcache</code>).
+        </li>
+      </ol>
+
+      <h3>At a glance</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Aspect</th><th>DeepInfer</th></tr></thead>
+          <tbody>
+            <tr><td>Model</td><td>DeepSeek-V4.1-Flash (MoE, MLA with compressed KV and sparse top-k attention, mHC, Engram, DSpark draft head, optional vision encoder)</td></tr>
+            <tr><td>Hardware</td><td>NVIDIA SM100 (CUDA 13) and Huawei Ascend 950 (CANN 9.2), selected with <code>DEEPINFER_ACCELERATOR</code></td></tr>
+            <tr><td>Interface</td><td>Offline Python API only: <code>LLM(...).generate(prompts, sampling_params)</code>. No HTTP server in this release.</td></tr>
+            <tr><td>Parallelism</td><td>Attention DP, MoE EP with EPLB, optional context parallel (CP), Engram parallel (ENP). No tensor parallel.</td></tr>
+            <tr><td>Languages</td><td>Python control flow and model; C++ scheduler, block manager and input prep (pybind); TileLang kernels for CUDA and Ascend</td></tr>
+            <tr><td>Lineage</td><td>Derived from vLLM, with ideas from SGLang and TensorRT-LLM</td></tr>
+            <tr><td>Not included</td><td>KV cache system, VE/prefill/decode disaggregation service, load balancing across DP replicas</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="context">
+      <h2>Context diagram</h2>
+      <p>
+        C4 level 1 shows DeepInfer as one box, with the people and systems around it in a real deployment. It follows
+        the reference architecture in DeepSeek's deployment Q&amp;A. The story is simple: a user's request comes in as
+        JSON, Recipe turns it into tokens, the request is routed to a DeepInfer engine, and the answer goes back
+        the same way.
+      </p>
+
+      <figure class="wide">
+        <svg class="diagram" viewBox="0 0 760 470" role="img"
+             aria-label="Context diagram. An API user sends request JSON to DeepSeek Recipe, which turns it into token ids and sampling settings and passes them to the entrypoint and load balancers. These route the request to a DeepInfer engine. Generated tokens return to the entrypoint, then to Recipe, which sends response JSON back to the user. DeepInfer loads weights from the Hugging Face checkpoint, saves and loads KV cache in 3FS, launches DeepSeek's kernel libraries, and runs on the accelerator cluster.">
+          <defs>
+            <marker id="ctx-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path class="ah" d="M0,0 L10,5 L0,10 z"/>
+            </marker>
+          </defs>
+
+          <!-- Row 1: the request path -->
+          <rect class="b" x="20" y="16" width="160" height="64" rx="8"/>
+          <text class="t-tag" x="100" y="34" text-anchor="middle">PERSON</text>
+          <text class="t-title" x="100" y="53" text-anchor="middle">API user</text>
+          <text class="t-sub" x="100" y="70" text-anchor="middle">chat / completion client</text>
+
+          <rect class="b-ext" x="300" y="16" width="160" height="64" rx="8"/>
+          <text class="t-tag" x="380" y="34" text-anchor="middle">EXTERNAL SYSTEM</text>
+          <text class="t-title" x="380" y="53" text-anchor="middle">DeepSeek Recipe</text>
+          <text class="t-sub" x="380" y="70" text-anchor="middle">JSON ⇄ token ids</text>
+
+          <rect class="b-ext" x="580" y="16" width="160" height="64" rx="8"/>
+          <text class="t-tag" x="660" y="34" text-anchor="middle">EXTERNAL SYSTEM</text>
+          <text class="t-title" x="660" y="53" text-anchor="middle">Entrypoint + LBs</text>
+          <text class="t-sub" x="660" y="70" text-anchor="middle">pick an engine</text>
+
+          <line class="a" x1="180" y1="38" x2="298" y2="38" marker-end="url(#ctx-ah)"/>
+          <text class="t-lbl" x="240" y="31" text-anchor="middle">request JSON</text>
+          <line class="a" x1="300" y1="60" x2="182" y2="60" marker-end="url(#ctx-ah)"/>
+          <text class="t-lbl" x="240" y="76" text-anchor="middle">response JSON</text>
+
+          <line class="a" x1="460" y1="38" x2="578" y2="38" marker-end="url(#ctx-ah)"/>
+          <text class="t-lbl" x="520" y="31" text-anchor="middle">tokens + params</text>
+          <line class="a" x1="580" y1="60" x2="462" y2="60" marker-end="url(#ctx-ah)"/>
+          <text class="t-lbl" x="520" y="76" text-anchor="middle">output tokens</text>
+
+          <!-- Row 2 -->
+          <rect class="b-ext" x="20" y="182" width="160" height="64" rx="8"/>
+          <text class="t-tag" x="100" y="200" text-anchor="middle">EXTERNAL SYSTEM</text>
+          <text class="t-title" x="100" y="219" text-anchor="middle">HF checkpoint</text>
+          <text class="t-sub" x="100" y="236" text-anchor="middle">weights · tokenizer</text>
+
+          <rect class="b-focus" x="270" y="170" width="220" height="88" rx="10"/>
+          <text class="t-tag t-hot" x="380" y="190" text-anchor="middle">SYSTEM IN SCOPE</text>
+          <text class="t-big" x="380" y="214" text-anchor="middle">DeepInfer</text>
+          <text class="t-sub" x="380" y="233" text-anchor="middle">inference engines</text>
+          <text class="t-sub" x="380" y="248" text-anchor="middle">prefill · decode · vision encoder</text>
+
+          <line class="a" x1="180" y1="214" x2="268" y2="214" marker-end="url(#ctx-ah)"/>
+          <text class="t-lbl" x="225" y="206" text-anchor="middle">weights</text>
+
+          <!-- LBs -> engine, engine -> entrypoint -->
+          <polyline class="a" points="630,80 630,200 492,200" marker-end="url(#ctx-ah)"/>
+          <text class="t-lbl" x="561" y="193" text-anchor="middle">request</text>
+          <polyline class="a" points="492,236 700,236 700,82" marker-end="url(#ctx-ah)"/>
+          <text class="t-lbl" x="596" y="252" text-anchor="middle">generated tokens</text>
+
+          <!-- Row 3 -->
+          <rect class="b-ext" x="20" y="350" width="220" height="64" rx="8"/>
+          <text class="t-tag" x="130" y="368" text-anchor="middle">EXTERNAL LIBRARIES</text>
+          <text class="t-title" x="130" y="387" text-anchor="middle">Kernel libraries</text>
+          <text class="t-sub" x="130" y="404" text-anchor="middle">FlashMLA · DeepGEMM · DeepEP …</text>
+
+          <rect class="b-ext" x="270" y="350" width="220" height="64" rx="8"/>
+          <text class="t-tag" x="380" y="368" text-anchor="middle">HARDWARE</text>
+          <text class="t-title" x="380" y="387" text-anchor="middle">Accelerator cluster</text>
+          <text class="t-sub" x="380" y="404" text-anchor="middle">NVIDIA SM100 · Ascend 950</text>
+
+          <rect class="b-ext" x="520" y="350" width="220" height="64" rx="8"/>
+          <text class="t-tag" x="630" y="368" text-anchor="middle">EXTERNAL SYSTEM</text>
+          <text class="t-title" x="630" y="387" text-anchor="middle">KV cache store (3FS)</text>
+          <text class="t-sub" x="630" y="404" text-anchor="middle">reuses prefixes for days</text>
+
+          <polyline class="a" points="310,258 310,300 130,300 130,348" marker-end="url(#ctx-ah)"/>
+          <text class="t-lbl" x="220" y="293" text-anchor="middle">launches kernels</text>
+
+          <line class="a" x1="380" y1="258" x2="380" y2="348" marker-end="url(#ctx-ah)"/>
+          <text class="t-lbl" x="388" y="318">HBM, streams,</text>
+          <text class="t-lbl" x="388" y="332">NCCL / HCCL</text>
+
+          <line class="a" x1="240" y1="382" x2="268" y2="382" marker-end="url(#ctx-ah)"/>
+
+          <polyline class="a" points="470,260 470,300 630,300 630,348" marker-start="url(#ctx-ah)" marker-end="url(#ctx-ah)"/>
+          <text class="t-lbl" x="550" y="293" text-anchor="middle">save / load KV</text>
+
+          <!-- Legend -->
+          <rect class="b-focus" x="20" y="440" width="26" height="16" rx="3"/>
+          <text class="t-lbl" x="54" y="452">system in scope</text>
+          <rect class="b-ext" x="190" y="440" width="26" height="16" rx="3"/>
+          <text class="t-lbl" x="224" y="452">external system</text>
+          <rect class="b" x="360" y="440" width="26" height="16" rx="3"/>
+          <text class="t-lbl" x="394" y="452">person</text>
+        </svg>
+        <figcaption>
+          A user sends request JSON to DeepSeek Recipe. Recipe turns it into token ids plus sampling settings
+          (temperature, max tokens, and so on). The entrypoint and load balancers pick a prefill or decode engine, and
+          that engine runs DeepInfer. Generated tokens go back the same way, and Recipe turns them into response
+          JSON. While it runs, the engine loads weights from the checkpoint, saves and loads KV cache in 3FS, and runs
+          DeepSeek's kernels on the accelerators.
+        </figcaption>
+      </figure>
+
+      <h3>Context elements</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Element</th><th>Type</th><th>Relationship to DeepInfer</th></tr></thead>
+          <tbody>
+            <tr><td>API user</td><td>Person</td><td>Sends a chat or completion request as JSON and gets a JSON answer back. Never talks to the engine directly.</td></tr>
+            <tr><td>DeepSeek Recipe</td><td>External system</td><td>The translator in front of the engines. It turns request JSON (messages, tools, settings) into token ids and <code>SamplingParams</code>, and turns generated tokens back into response JSON. It matches the official DeepSeek API exactly. Repo: <a href="https://github.com/deepseek-ai/deepseek-recipe">deepseek-recipe</a>.</td></tr>
+            <tr><td>Entrypoint + load balancers</td><td>External system</td><td>Receives token ids from Recipe and decides which engine gets the request. The prefill, decode and vision-encoder balancers each spread work across DeepInfer engines (DP ranks).</td></tr>
+            <tr><td>HF checkpoint</td><td>External system</td><td>Source of <code>config.json</code>, the tokenizer and the safetensors weights that each engine loads at startup.</td></tr>
+            <tr><td>KV cache store (3FS)</td><td>External system</td><td>SSD storage for paged KV blocks, kept for 3–7 days. A request that repeats a prefix loads its KV from here instead of recomputing it.</td></tr>
+            <tr><td>Kernel libraries</td><td>External libraries</td><td>FlashMLA, DeepGEMM, DeepEP, DeepSelect and TileKernels do the heavy GPU work (attention, matmuls, MoE all-to-all, top-k).</td></tr>
+            <tr><td>Accelerator cluster</td><td>Hardware</td><td>NVIDIA SM100 GPUs or Ascend 950 NPUs. Prefill engines run on 8-GPU machines; decode engines span 64–128 GPUs.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="components">
+      <h2>Component diagram</h2>
+      <p>
+        C4 level 3 zooms into one engine (one DP rank). The level 2 container view is skipped on purpose: the
+        release ships one container, the Python process, plus helper processes that the table below lists. The
+        <span style="color: var(--accent)">blue path</span> runs on every step. Everything else runs at startup,
+        on the side, or only when the feature is on.
+      </p>
+
+      <figure class="wide">
+        <svg class="diagram" viewBox="0 0 800 748" role="img"
+             aria-label="Component diagram of one DeepInfer engine. The caller's generate() call goes to the LLM entrypoint, then to LLMEngine. Each step, LLMEngine asks the C++ Scheduler for a batch and tells the Driver Worker to execute it. The worker calls ModelRunner, which replays a CUDA graph of DeepseekForCausalLM, then hands the output to the Sampler. Results return to LLMEngine through a post_process callback. The scheduler's block ids index the KV tensors in CacheEngine. On the side: multimodal processor, structured-output matcher builder, CP follower workers, and EPLB. The model launches kernel libraries and exchanges MoE tokens with peer ranks via DeepEP.">
+          <defs>
+            <marker id="cmp-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path class="ah" d="M0,0 L10,5 L0,10 z"/>
+            </marker>
+            <marker id="cmp-ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path class="ah-hot" d="M0,0 L10,5 L0,10 z"/>
+            </marker>
+          </defs>
+
+          <!-- Engine boundary -->
+          <rect class="boundary" x="8" y="100" width="784" height="490" rx="12"/>
+          <text class="t-tag" x="20" y="94">DEEPINFER · ONE ENGINE PER DP RANK</text>
+
+          <!-- Row A: caller -->
+          <rect class="b-ext" x="300" y="16" width="200" height="56" rx="8"/>
+          <text class="t-title" x="400" y="40" text-anchor="middle">Caller script</text>
+          <text class="t-sub" x="400" y="58" text-anchor="middle">LLM(...).generate()</text>
+
+          <!-- Row B -->
+          <rect class="b" x="300" y="116" width="200" height="56" rx="8"/>
+          <text class="t-title" x="400" y="140" text-anchor="middle">LLM entrypoint</text>
+          <text class="t-sub" x="400" y="158" text-anchor="middle">entrypoints/llm.py</text>
+
+          <!-- Row C -->
+          <rect class="b" x="20" y="216" width="180" height="56" rx="8"/>
+          <text class="t-title" x="110" y="240" text-anchor="middle">Multimodal processor</text>
+          <text class="t-sub" x="110" y="258" text-anchor="middle">ve/ · forked workers</text>
+
+          <rect class="b" x="300" y="216" width="200" height="56" rx="8"/>
+          <text class="t-title" x="400" y="240" text-anchor="middle">LLMEngine</text>
+          <text class="t-sub" x="400" y="258" text-anchor="middle">engine/llm_engine.py</text>
+
+          <rect class="b" x="600" y="216" width="180" height="56" rx="8"/>
+          <text class="t-title" x="690" y="240" text-anchor="middle">SO matcher builder</text>
+          <text class="t-sub" x="690" y="258" text-anchor="middle">structure_output/</text>
+
+          <!-- Row D -->
+          <rect class="b" x="20" y="316" width="180" height="56" rx="8"/>
+          <text class="t-title" x="110" y="340" text-anchor="middle">Scheduler + BlockMgr</text>
+          <text class="t-sub" x="110" y="358" text-anchor="middle">csrc/engine · C++</text>
+
+          <rect class="b" x="300" y="316" width="200" height="56" rx="8"/>
+          <text class="t-title" x="400" y="340" text-anchor="middle">Driver Worker</text>
+          <text class="t-sub" x="400" y="358" text-anchor="middle">worker/worker.py</text>
+
+          <rect class="b" x="600" y="316" width="180" height="56" rx="8"/>
+          <text class="t-title" x="690" y="340" text-anchor="middle">CP follower workers</text>
+          <text class="t-sub" x="690" y="358" text-anchor="middle">spawned when cp &gt; 1</text>
+
+          <!-- Row E -->
+          <rect class="b" x="300" y="416" width="200" height="56" rx="8"/>
+          <text class="t-title" x="400" y="440" text-anchor="middle">ModelRunner</text>
+          <text class="t-sub" x="400" y="458" text-anchor="middle">+ CUDA graph runner</text>
+
+          <rect class="b" x="600" y="416" width="180" height="56" rx="8"/>
+          <text class="t-title" x="690" y="440" text-anchor="middle">Sampler</text>
+          <text class="t-sub" x="690" y="458" text-anchor="middle">layers/sampler.py</text>
+
+          <!-- Row F -->
+          <rect class="b" x="20" y="516" width="180" height="56" rx="8"/>
+          <text class="t-title" x="110" y="540" text-anchor="middle">CacheEngine</text>
+          <text class="t-sub" x="110" y="558" text-anchor="middle">paged KV + state slots</text>
+
+          <rect class="b" x="300" y="516" width="200" height="56" rx="8"/>
+          <text class="t-title" x="400" y="540" text-anchor="middle">DeepseekForCausalLM</text>
+          <text class="t-sub" x="400" y="558" text-anchor="middle">models/ + v4_modules/</text>
+
+          <rect class="b" x="600" y="516" width="180" height="56" rx="8"/>
+          <text class="t-title" x="690" y="540" text-anchor="middle">EPLB</text>
+          <text class="t-sub" x="690" y="558" text-anchor="middle">model_executor/eplb/</text>
+
+          <!-- Row G: outside the engine -->
+          <rect class="b-ext" x="20" y="640" width="180" height="56" rx="8"/>
+          <text class="t-title" x="110" y="664" text-anchor="middle">Peer ranks</text>
+          <text class="t-sub" x="110" y="682" text-anchor="middle">same EP / DP group</text>
+
+          <rect class="b-ext" x="300" y="640" width="200" height="56" rx="8"/>
+          <text class="t-title" x="400" y="664" text-anchor="middle">Kernel libraries</text>
+          <text class="t-sub" x="400" y="682" text-anchor="middle">FlashMLA · DeepGEMM · DeepEP</text>
+
+          <!-- Hot path arrows -->
+          <line class="a a-hot" x1="400" y1="72" x2="400" y2="114" marker-end="url(#cmp-ah-hot)"/>
+          <text class="t-lbl" x="408" y="89">generate()</text>
+
+          <line class="a a-hot" x1="400" y1="172" x2="400" y2="214" marker-end="url(#cmp-ah-hot)"/>
+          <text class="t-lbl" x="408" y="198">add_request, step()</text>
+
+          <polyline class="a a-hot" points="330,272 330,294 110,294 110,314" marker-end="url(#cmp-ah-hot)"/>
+          <text class="t-lbl" x="220" y="288" text-anchor="middle">schedule()</text>
+
+          <line class="a a-hot" x1="380" y1="272" x2="380" y2="314" marker-end="url(#cmp-ah-hot)"/>
+          <line class="a a-hot" x1="420" y1="316" x2="420" y2="274" marker-end="url(#cmp-ah-hot)"/>
+          <text class="t-lbl" x="428" y="291">↓ execute_model_step</text>
+          <text class="t-lbl" x="428" y="306">↑ post_process(outputs)</text>
+
+          <line class="a a-hot" x1="400" y1="372" x2="400" y2="414" marker-end="url(#cmp-ah-hot)"/>
+          <text class="t-lbl" x="408" y="398">forward, then sample</text>
+
+          <line class="a a-hot" x1="500" y1="444" x2="598" y2="444" marker-end="url(#cmp-ah-hot)"/>
+          <text class="t-lbl" x="550" y="436" text-anchor="middle">model output</text>
+
+          <line class="a a-hot" x1="400" y1="472" x2="400" y2="514" marker-end="url(#cmp-ah-hot)"/>
+          <text class="t-lbl" x="408" y="498">replay graph / eager</text>
+
+          <!-- Side arrows -->
+          <line class="a" x1="300" y1="244" x2="202" y2="244" marker-end="url(#cmp-ah)"/>
+          <text class="t-lbl" x="250" y="236" text-anchor="middle">images</text>
+
+          <line class="a" x1="500" y1="244" x2="598" y2="244" marker-end="url(#cmp-ah)"/>
+          <text class="t-lbl" x="550" y="236" text-anchor="middle">so_args</text>
+
+          <line class="a" x1="500" y1="344" x2="598" y2="344" marker-end="url(#cmp-ah)"/>
+          <text class="t-lbl" x="550" y="336" text-anchor="middle">same call via</text>
+          <text class="t-lbl" x="550" y="360" text-anchor="middle">shm queue</text>
+
+          <line class="a" x1="110" y1="372" x2="110" y2="514" marker-end="url(#cmp-ah)"/>
+          <text class="t-lbl" x="118" y="440">block ids</text>
+          <text class="t-lbl" x="118" y="454">index the KV</text>
+
+          <line class="a" x1="298" y1="544" x2="202" y2="544" marker-start="url(#cmp-ah)" marker-end="url(#cmp-ah)"/>
+          <text class="t-lbl" x="250" y="536" text-anchor="middle">read / write</text>
+
+          <line class="a" x1="502" y1="544" x2="598" y2="544" marker-start="url(#cmp-ah)" marker-end="url(#cmp-ah)"/>
+          <text class="t-lbl" x="550" y="536" text-anchor="middle">expert load</text>
+          <text class="t-lbl" x="550" y="560" text-anchor="middle">new placement</text>
+
+          <line class="a" x1="400" y1="572" x2="400" y2="638" marker-end="url(#cmp-ah)"/>
+          <text class="t-lbl" x="408" y="610">kernel launches</text>
+
+          <polyline class="a" points="320,572 320,616 110,616 110,638" marker-end="url(#cmp-ah)"/>
+          <text class="t-lbl" x="215" y="609" text-anchor="middle">DeepEP all-to-all</text>
+
+          <!-- Legend -->
+          <line class="a a-hot" x1="20" y1="728" x2="50" y2="728"/>
+          <text class="t-lbl" x="58" y="732">per-step hot path</text>
+          <rect class="b-ext" x="250" y="720" width="26" height="16" rx="3"/>
+          <text class="t-lbl" x="284" y="732">outside the engine</text>
+          <rect class="boundary" x="450" y="720" width="26" height="16" rx="3"/>
+          <text class="t-lbl" x="484" y="732">engine (one DP rank)</text>
+        </svg>
+        <figcaption>
+          Each step, LLMEngine gets a batch from the C++ scheduler and passes it to the driver worker. The worker runs
+          the model through ModelRunner and samples, then reports results through the <code>post_process</code> callback.
+          The scheduler only hands out block <em>ids</em>; the KV tensors those ids point into live in CacheEngine on the GPU.
+          Ranks meet in two places: MoE token exchange through DeepEP, and an all-reduce vote inside the scheduler
+          (not drawn) that keeps every DP rank on the same step type.
+        </figcaption>
+      </figure>
+
+      <h3>Components</h3>
+      <p>
+        <strong>Links to</strong> lists the components each one talks to. <strong>Source</strong> links go to the upstream repository;
+        a local copy is at <code>references/DeepInfer</code>. Rows marked ◆ are drawn in the diagram.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Component</th><th>What it does</th><th>Links to</th><th>Source</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>◆ LLM entrypoint</td>
+              <td>The public offline API. Tokenizes prompts, deep-copies <code>SamplingParams</code> per request, calls <code>add_request</code>, then loops <code>step()</code> until no request is left. When the loop ends it calls <code>flush_inflight_reqs()</code> to drain the last ZOS step, and can detokenize the results.</td>
+              <td>Caller, LLMEngine</td>
+              <td><a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/entrypoints/llm.py">entrypoints/llm.py</a></td>
+            </tr>
+            <tr>
+              <td>◆ LLMEngine</td>
+              <td>Owns one DP rank. At startup it starts the workers, loads weights, measures free memory, allocates the KV cache and warms up or captures CUDA graphs. After that, each <code>step()</code> schedules a batch, clones or zeroes state for forked sequences, collects multimodal results and runs the worker. Its <code>post_process</code> callback turns sampled tokens into <code>RequestOutput</code>s and frees finished sequences.</td>
+              <td>LLM entrypoint, Scheduler, Driver Worker, Multimodal processor, SO matcher builder, Stats logger</td>
+              <td><a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/engine/llm_engine.py">engine/llm_engine.py</a>, <a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/engine/engine_type.py">engine_type.py</a></td>
+            </tr>
+            <tr>
+              <td>◆ Scheduler (C++)</td>
+              <td>Builds each step's batch. A two-round all-reduce vote decides prefill or decode for the whole DP group. Prefill chunks prompts within a token budget and a FLOPs budget (<code>FlopsEstimator</code>) and never cuts an image in half. Decode picks sequences last-come-first-served and preempts the one with the shortest output when blocks run out. It also sizes per-sequence draft lengths for speculative decoding.</td>
+              <td>LLMEngine, BlockManager, peer DP ranks (vote)</td>
+              <td><a href="https://github.com/deepseek-ai/DeepInfer/blob/main/csrc/engine/scheduler.hpp">scheduler.hpp</a>, <a href="https://github.com/deepseek-ai/DeepInfer/blob/main/csrc/engine/flops_estimator.hpp">flops_estimator.hpp</a>, <a href="https://github.com/deepseek-ai/DeepInfer/blob/main/csrc/engine/mtp_varlen.hpp">mtp_varlen.hpp</a></td>
+            </tr>
+            <tr>
+              <td>◆ BlockManager (C++)</td>
+              <td>A free-list allocator with two instances: one hands out paged KV block ids, the other hands out per-sequence state slots (SWA window and compression state). Each request gets <code>OK</code>, <code>LATER</code> or <code>NEVER</code>.</td>
+              <td>Scheduler; its ids index CacheEngine tensors</td>
+              <td><a href="https://github.com/deepseek-ai/DeepInfer/blob/main/csrc/engine/block_manager.hpp">block_manager.hpp</a></td>
+            </tr>
+            <tr>
+              <td>Sequence and output pools (C++)</td>
+              <td>Sequence state, <code>SequenceMetadata</code> and <code>RequestOutput</code> object pools, output processing and sampler input prep, all exposed through pybind. Objects are released one step late (<code>DeferredRelease</code>) because the GPU may still be reading them.</td>
+              <td>Scheduler, LLMEngine, ModelRunner</td>
+              <td><a href="https://github.com/deepseek-ai/DeepInfer/blob/main/csrc/engine/sequence.hpp">sequence.hpp</a>, <a href="https://github.com/deepseek-ai/DeepInfer/blob/main/csrc/engine/process_output.hpp">process_output.hpp</a>, <a href="https://github.com/deepseek-ai/DeepInfer/blob/main/csrc/engine/prepare_sample.cpp">prepare_sample.cpp</a></td>
+            </tr>
+            <tr>
+              <td>◆ Driver Worker</td>
+              <td>The CP-rank-0 worker inside the engine process. <code>execute_model_step</code> runs in a fixed order: forward this step, post-process the previous step, sample this step, then post-process. Prefill steps post-process at once; ZOS decode steps defer it so it overlaps the next forward. It also forwards each call to the CP followers.</td>
+              <td>LLMEngine (callbacks), ModelRunner, CP follower workers</td>
+              <td><a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/worker/worker.py">worker/worker.py</a>, <a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/worker/base.py">worker/base.py</a></td>
+            </tr>
+            <tr>
+              <td>◆ CP follower workers</td>
+              <td>Started only when <code>cp &gt; 1</code>, one process per extra CP rank. Each loops forever: receive <code>(method, kwargs)</code> from the driver, then run the same method on its own GPU.</td>
+              <td>Driver Worker (shared-memory queue)</td>
+              <td><a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/worker/base.py">worker/base.py</a>, <a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/distributed/shm_broadcast.py">shm_broadcast.py</a></td>
+            </tr>
+            <tr>
+              <td>◆ ModelRunner</td>
+              <td>Turns <code>SequenceMetadata</code> into <code>InputMetadata</code> tensors (in C++, with ZOS-aware variants), picks the CUDA graph for the batch size, then replays it (decode) or runs eagerly (prefill). It also prepares sampler inputs. At startup it profiles memory and records a decode latency curve that the scheduler uses. No <code>cuda synchronize</code> is allowed on this path.</td>
+              <td>Driver Worker, DeepseekForCausalLM, Sampler</td>
+              <td><a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/worker/model_runner.py">model_runner.py</a>, <a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/worker/cuda_graph_runner.py">cuda_graph_runner.py</a>, <a href="https://github.com/deepseek-ai/DeepInfer/tree/main/csrc/engine/input_metadata">csrc/engine/input_metadata/</a></td>
+            </tr>
+            <tr>
+              <td>◆ CacheEngine</td>
+              <td>Works out how many KV blocks fit after profiling, allocates them as raw <code>uint8</code> buffers, and carves per-layer views from them: compressed KV and indexer KV (paged), plus SWA and compression state (one slot per sequence).</td>
+              <td>DeepseekForCausalLM (read/write), BlockManager (ids), ModelRunner</td>
+              <td><a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/worker/cache_engine.py">worker/cache_engine.py</a></td>
+            </tr>
+            <tr>
+              <td>◆ DeepseekForCausalLM</td>
+              <td>The V4.1 model. Each decoder layer runs MLA attention (compressed KV, a sparse top-k indexer and a sliding window) and an MoE FFN, wrapped in mHC residual mixing. Some layers add Engram n-gram memory. The model also has a DSpark/DFlash draft head, YoCo prefill truncation and cross-layer KV sharing. The VL variant adds a ViT encoder.</td>
+              <td>ModelRunner, CacheEngine, EPLB, kernel libraries, peer ranks (DeepEP)</td>
+              <td><a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/models/deepseek.py">deepseek.py</a>, <a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/models/decoder_layer.py">decoder_layer.py</a>, <a href="https://github.com/deepseek-ai/DeepInfer/tree/main/deepinfer/model_executor/models/v4_modules">v4_modules/</a>, <a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/models/mtp/dflash.py">mtp/dflash.py</a></td>
+            </tr>
+            <tr>
+              <td>◆ Sampler</td>
+              <td>Applies temperature, top-k and top-p, and returns logprobs. It verifies draft tokens for speculative decoding and applies structured-output token masks. With a fixed <code>seq_seed</code>, sampling is deterministic.</td>
+              <td>ModelRunner, SO matchers, DeepSelect</td>
+              <td><a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/sampler.py">layers/sampler.py</a>, <a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/sampler_utils.py">sampler_utils.py</a></td>
+            </tr>
+            <tr>
+              <td>◆ EPLB</td>
+              <td>Expert-parallel load balancer. It counts tokens per expert over a window. At a set interval it recomputes which physical slot holds which expert, giving hot experts redundant copies, then moves the weights in place over NVLink <code>symm_mem</code> or NCCL P2P.</td>
+              <td>MoE layers, EP peer ranks</td>
+              <td><a href="https://github.com/deepseek-ai/DeepInfer/tree/main/deepinfer/model_executor/eplb">model_executor/eplb/</a></td>
+            </tr>
+            <tr>
+              <td>◆ Multimodal processor</td>
+              <td>Forked processes turn image bytes into patches and put them in a shared-memory pool. Each step the engine collects the finished ones and marks those sequences ready to schedule. The ViT itself runs inside the model on the GPU.</td>
+              <td>LLMEngine, Scheduler, DeepseekVL model</td>
+              <td><a href="https://github.com/deepseek-ai/DeepInfer/tree/main/deepinfer/ve">ve/</a>, <a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/models/deepseek_vl.py">deepseek_vl.py</a></td>
+            </tr>
+            <tr>
+              <td>◆ SO matcher builder</td>
+              <td>A CPU-pinned thread pool that compiles regex, JSON-schema and EBNF grammars with xgrammar in the background. Each compiled matcher is attached to its sequence, and the sampler uses it to mask tokens.</td>
+              <td>LLMEngine, Sampler</td>
+              <td><a href="https://github.com/deepseek-ai/DeepInfer/tree/main/deepinfer/structure_output">structure_output/</a></td>
+            </tr>
+            <tr>
+              <td>Parallel state</td>
+              <td>Creates every process group: world, DP, CP, EP, EP-in-DP and ENP, plus gloo CPU copies for the scheduler vote. It also creates the shared-memory queue used for CP broadcast and the symmetric buffers DeepEP uses.</td>
+              <td>All distributed components</td>
+              <td><a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/parallel_utils/parallel_state.py">parallel_state.py</a>, <a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/parallel_utils/userbuffer.py">userbuffer.py</a></td>
+            </tr>
+            <tr>
+              <td>HF loader</td>
+              <td>Reads config, tokenizer and safetensors. Before loading, it checks shard integrity, that every parameter is covered, and that each quantized weight has its scale.</td>
+              <td>ModelRunner (<code>load_model</code>), Hugging Face Hub</td>
+              <td><a href="https://github.com/deepseek-ai/DeepInfer/tree/main/deepinfer/hugging_face">hugging_face/</a>, <a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/model_loader.py">model_loader.py</a></td>
+            </tr>
+            <tr>
+              <td>deep_cluster / platform</td>
+              <td>Detects NVIDIA or Ascend hardware from procfs and sysfs, binds processes to NUMA nodes and CPUs, and picks the TileLang backend (<code>cuda</code> or <code>asc</code>).</td>
+              <td>LLMEngine, workers, kernels</td>
+              <td><a href="https://github.com/deepseek-ai/DeepInfer/tree/main/deep_cluster">deep_cluster/</a>, <a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/platform.py">platform.py</a>, <a href="https://github.com/deepseek-ai/DeepInfer/tree/main/deepinfer/npu_ops">npu_ops/</a></td>
+            </tr>
+            <tr>
+              <td>Stats logger / profiler</td>
+              <td>Logs throughput, step time, MoE balance (<code>moe_lb</code>) and memory at intervals. An optional HTTP endpoint triggers torch profiling while the engine runs.</td>
+              <td>LLMEngine</td>
+              <td><a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/engine/stats_logger.py">stats_logger.py</a>, <a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/engine/profile_server.py">profile_server.py</a></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="step-lifecycle">
+      <h2>Request lifecycle</h2>
+      <p>
+        This table follows one request through a <code>NORMAL</code> engine, which does both prefill and decode,
+        with zero-overhead scheduling on (the default). Steps 3–7 repeat until the request finishes.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Where</th><th>What happens</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>LLM entrypoint</td><td>The prompt becomes <code>int32</code> token ids. <code>add_request</code> creates a <code>Sequence</code> and puts it on the scheduler's waiting queue. If the request has images, the multimodal workers process them first. If it has <code>so_args</code>, a grammar compiles in the background.</td></tr>
+            <tr><td>2</td><td>Scheduler: step type</td><td>Every DP rank votes over an all-reduce. Prefill is tried every 70 decode steps if <em>all</em> ranks have prefill work, and every 100 if <em>any</em> rank does. A rank with nothing to do runs an empty placeholder step so the collectives stay in lockstep.</td></tr>
+            <tr><td>3</td><td>Scheduler: batch</td><td>Prefill takes prompts in FIFO order, cut into chunks by a token budget and a FLOPs budget, and reserves KV blocks and a state slot for each. Decode moves prefilled sequences into <code>running</code>, picks last-come-first-served, and preempts the shortest output when blocks run out.</td></tr>
+            <tr><td>4</td><td>Driver Worker: forward</td><td>ModelRunner builds <code>InputMetadata</code> in C++. Decode replays a CUDA graph; prefill runs eagerly. Inside the model, MoE tokens go to their experts and back through DeepEP.</td></tr>
+            <tr><td>5</td><td>Driver Worker: previous step</td><td>While the GPU runs step <em>N</em>, the CPU finishes step <em>N−1</em>: it appends the tokens, checks stop conditions and builds <code>RequestOutput</code>s. This overlap is what "zero-overhead" means.</td></tr>
+            <tr><td>6</td><td>Sampler</td><td>Samples step <em>N</em>. With DSpark on, it checks the draft tokens, keeps the accepted prefix and sizes the next drafts from confidence. Structured-output masks apply here.</td></tr>
+            <tr><td>7</td><td>EPLB</td><td>Records expert load. Every <em>M</em> steps it moves experts between GPUs.</td></tr>
+            <tr><td>8</td><td>Finish</td><td>When the request hits EOS, <code>max_tokens</code> or a stop condition, the scheduler frees its blocks and state slot (one step late). The entrypoint collects the outputs, drains the last step with <code>flush_inflight_reqs()</code>, and detokenizes.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="parallelism">
+      <h2>Parallelism and processes</h2>
+      <p>
+        A launcher (<a href="https://github.com/deepseek-ai/DeepInfer/blob/main/examples/_launch.py">examples/_launch.py</a>)
+        starts one process per DP rank on each node. World size is <code>dp × cp</code>, and EP groups are
+        consecutive runs of <code>ep_size</code> ranks.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Axis</th><th>What is split</th><th>Communication</th><th>Production guidance</th></tr></thead>
+          <tbody>
+            <tr><td>DP (attention)</td><td>Requests. Each rank has its own engine, scheduler and KV cache.</td><td>Only the step-type vote (gloo CPU group under ZOS)</td><td>Prefill DP2–8, decode DP64–128; #DP = #EP</td></tr>
+            <tr><td>EP (MoE)</td><td>Routed experts, plus redundant copies of hot experts</td><td>DeepEP dispatch and combine (all-to-all over NVLink or RDMA); EPLB weight shuffle</td><td>Prefill uses the smallest EP that fits in HBM; decode uses "wide EP" (64–128)</td></tr>
+            <tr><td>CP (context)</td><td>The tokens of one long prompt, split across GPUs in a balanced "mirror" layout</td><td>All-gather of hidden states; driver-to-follower calls over a shared-memory queue</td><td>Supported, but not used in production (up to 5% slower than DP)</td></tr>
+            <tr><td>ENP (Engram)</td><td>Engram n-gram tables, sharded by vocabulary</td><td>Gather by hash across ranks; on GPUs, one-sided RDMA from host memory</td><td>Prefill ENP8; decode ENP = DP/EP size</td></tr>
+            <tr><td>TP</td><td colspan="3">Not implemented. The model fits in memory, and tensor parallelism costs too much communication.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Processes and threads on one rank</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Unit</th><th>Count</th><th>Role</th></tr></thead>
+          <tbody>
+            <tr><td>Engine process</td><td>1 per DP rank</td><td>Runs the <code>LLM</code>, <code>LLMEngine</code>, scheduler and driver worker (CP rank 0)</td></tr>
+            <tr><td>CP follower process</td><td><code>cp − 1</code> per engine</td><td>Runs the same worker method on its own GPU</td></tr>
+            <tr><td>Multimodal worker processes</td><td>Several, only for VL models</td><td>Image preprocessing into shared memory</td></tr>
+            <tr><td>SO builder threads</td><td>Pool pinned to idle CPUs</td><td>xgrammar compilation</td></tr>
+            <tr><td>Stats / profile threads</td><td>Optional</td><td>Logging and the HTTP profiling endpoint</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="kv-cache">
+      <h2>KV cache and memory</h2>
+      <p>
+        V4.1 attention keeps two kinds of memory per layer. <strong>Paged</strong> stores grow with context length
+        and are addressed by block ids. <strong>State</strong> stores are a fixed size per sequence and are
+        addressed by a state slot. <code>CacheEngine</code> holds the tensors, and the C++ <code>BlockManager</code>
+        hands out the ids.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Store</th><th>Holds</th><th>Addressed by</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>ca_cache</code></td><td>Compressed attention KV (one entry per <code>ratio</code> tokens)</td><td>Block id (paged)</td><td>Data and scale per token: 288 B for per-16 FP4, 528 B for MXFP8</td></tr>
+            <tr><td><code>ica_cache</code></td><td>Index-attention keys for sparse top-k block selection</td><td>Block id (paged)</td><td>Read by the <code>MQA</code> indexer to choose which blocks to attend</td></tr>
+            <tr><td><code>swa_cache</code></td><td>Sliding-window attention KV</td><td>State slot</td><td>A ring of FP8 data (512 B) plus a UE8M0 scale (16 B) per token</td></tr>
+            <tr><td><code>ca_state</code> / <code>ica_state</code></td><td>Compressor and indexer state that is still accumulating</td><td>State slot</td><td>FP32 ring; not written to disk</td></tr>
+            <tr><td>DFlash draft KV</td><td>KV for the speculative draft head</td><td>Separate draft cache</td><td>Filled from target-layer features during the main forward</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>In DeepSeek's production deployment the same data lives across three tiers (from the deployment Q&amp;A):</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Content</th><th>Medium</th><th>Managed by</th></tr></thead>
+          <tbody>
+            <tr><td>In-flight block KV + state</td><td>GPU HBM</td><td>Prefill / decode engines (this repo)</td></tr>
+            <tr><td>SWA KV cache</td><td>Local host memory</td><td>Engines; a hit on another machine pulls over a 400G VLAN</td></tr>
+            <tr><td>Paged block KV cache</td><td>3FS SSD cluster, 10+2 erasure coding</td><td>kvcache-store (not released); TTL 3 days for agent traffic, 7 days for chatbot traffic</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="features">
+      <h2>Features and switches</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Feature</th><th>What it buys</th><th>How to turn it on</th><th>Where it lives</th></tr></thead>
+          <tbody>
+            <tr><td>Zero-overhead scheduling</td><td>CPU scheduling and post-processing overlap the GPU forward</td><td>On by default for <code>NORMAL</code> and <code>COMPLETION</code> engines (<code>DEEPINFER_ZERO_OVERHEAD_SCHEDULING</code>)</td><td><a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/worker/worker.py">worker.py</a>, <a href="https://github.com/deepseek-ai/DeepInfer/blob/main/csrc/engine/zos.cpp">zos.cpp</a></td></tr>
+            <tr><td>DSpark + confidence-scheduled verification</td><td>Several tokens per decode step from a draft head; per-sequence draft length set by confidence</td><td><code>DEEPINFER_ENABLE_MTP_VARLEN=1</code>; <code>DEEPINFER_USE_NEXTN_DECODE</code> sets the max draft length (default 5)</td><td><a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/models/mtp/dflash.py">mtp/dflash.py</a>, <a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/tilelang_ops/schedule_mtp_varlen.py">schedule_mtp_varlen.py</a></td></tr>
+            <tr><td>SWA bounded replay (YoCo)</td><td>Upper layers prefill only a short suffix instead of the whole prompt</td><td><code>DEEPINFER_YOCO_PREFILL_TRUNCATION_MODE=compact</code>, <code>DEEPINFER_YOCO_PREFILL_KEEP_TOKENS=140</code></td><td><a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/models/v4_modules/yoco.py">v4_modules/yoco.py</a>, <a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/input_metadata/yoco.py">input_metadata/yoco.py</a></td></tr>
+            <tr><td>Batch-invariant inference</td><td>Same numbers whatever the batch looks like (NVIDIA only)</td><td><code>DEEPINFER_BATCH_INVARIANT=1</code></td><td>Kernels; <a href="https://github.com/deepseek-ai/DeepInfer/blob/main/tests/models/test_batch_invariant.py">test_batch_invariant.py</a></td></tr>
+            <tr><td>Deterministic sampling</td><td>Same input and params give the same output (NVIDIA only)</td><td><code>DEEPINFER_BATCH_INVARIANT=1 DEEPINFER_ENABLE_MTP_VARLEN=0</code> and a fixed <code>seq_seed</code></td><td><a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/sampler.py">sampler.py</a></td></tr>
+            <tr><td>Structured outputs</td><td>Output constrained to a regex, JSON schema or EBNF grammar</td><td><code>SamplingParams(so_args={"schema_type": ..., "schema": ...})</code></td><td><a href="https://github.com/deepseek-ai/DeepInfer/tree/main/deepinfer/structure_output">structure_output/</a></td></tr>
+            <tr><td>EPLB</td><td>Evens out MoE load across EP ranks</td><td><code>DEEPINFER_OVERRIDE_NUM_EXTRA_EXPERTS</code>, <code>DEEPINFER_EXPERT_COUNT_WINDOW_SIZE</code>, <code>DEEPINFER_EXPERT_REARRANGEMENT_STEP_INTERVAL</code></td><td><a href="https://github.com/deepseek-ai/DeepInfer/tree/main/deepinfer/model_executor/eplb">eplb/</a></td></tr>
+            <tr><td>CUDA graphs</td><td>Decode launches the whole step at once, with no per-kernel CPU launch cost</td><td>On by default; <code>DEEPINFER_ENFORCE_EAGER=1</code> turns them off</td><td><a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/worker/cuda_graph_runner.py">cuda_graph_runner.py</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>The full list of environment variables is in <a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/environ.py">deepinfer/environ.py</a>.</p>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="kernels">
+      <h2>Kernel libraries</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Library</th><th>Used for</th><th>Called from</th></tr></thead>
+          <tbody>
+            <tr><td><a href="https://github.com/deepseek-ai/FlashMLA">FlashMLA</a></td><td>Sparse MLA attention over the compressed KV cache</td><td><code>v4_modules/attn.py</code>, <code>layers/attention_backend.py</code></td></tr>
+            <tr><td><a href="https://github.com/deepseek-ai/DeepGEMM">DeepGEMM</a></td><td>FP8/FP4 GEMMs, grouped MoE GEMMs, mHC pre-norm GEMM, symmetric buffers</td><td><code>v4_modules/mlp.py</code>, <code>linear.py</code>, <code>mhc_ops.py</code>, <code>index_attn.py</code></td></tr>
+            <tr><td><a href="https://github.com/deepseek-ai/DeepEP">DeepEP</a></td><td>MoE dispatch and combine across the EP group; CP all-gather buffers</td><td><code>v4_modules/mlp.py</code>, <code>engram.py</code>, <code>parallel_utils/</code></td></tr>
+            <tr><td><a href="https://github.com/deepseek-ai/DeepSelect">DeepSelect</a></td><td>Fast top-k selection (sparse indexer, sampler)</td><td><code>index_attn.py</code>, <code>sampler.py</code></td></tr>
+            <tr><td><a href="https://github.com/deepseek-ai/TileKernels">TileKernels</a></td><td>mHC mixing, Engram hashing, quantization, RoPE, MoE helpers</td><td><code>hc.py</code>, <code>engram.py</code>, <code>mlp.py</code>, <code>deepseek.py</code></td></tr>
+            <tr><td>In-repo TileLang ops</td><td>KV store and load, metadata prep, ZOS gathers, the sampler, MTP scheduling. Each op has a CUDA and an Ascend version.</td><td><a href="https://github.com/deepseek-ai/DeepInfer/tree/main/deepinfer/model_executor/layers/tilelang_ops">layers/tilelang_ops/</a></td></tr>
+            <tr><td>xgrammar</td><td>Grammar compilation and token masks for structured output</td><td><code>structure_output/</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="glossary">
+      <h2>Glossary</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Term</th><th>Meaning in DeepInfer</th></tr></thead>
+          <tbody>
+            <tr><td>ZOS</td><td>Zero-overhead scheduling: post-processing of decode step <em>N−1</em> overlaps the forward of step <em>N</em>.</td></tr>
+            <tr><td>Engine type</td><td><code>NORMAL</code> does prefill and decode; <code>PROMPT</code> does prefill only; <code>COMPLETION</code> does decode only. The last two are the hooks for P/D disaggregation.</td></tr>
+            <tr><td>MLA</td><td>Multi-head latent attention: attention over a low-rank latent KV, here compressed further and read sparsely through a top-k indexer.</td></tr>
+            <tr><td>SWA</td><td>Sliding-window attention; its KV is a fixed-size ring per sequence (a state slot), not paged blocks.</td></tr>
+            <tr><td>YoCo</td><td>"You only cache once" layer split. Upper (consumer) layers reuse shared KV, which lets prefill truncate their work to a bounded suffix.</td></tr>
+            <tr><td>DSpark / DFlash / MTP / nextn</td><td>Speculative decoding: a draft head proposes up to <code>nextn</code> tokens, the main model verifies them, and a confidence model decides how many to draft per sequence.</td></tr>
+            <tr><td>mHC</td><td>Manifold-constrained hyper-connections: a residual stream widened <code>hc_mult</code> times, mixed before and after each sub-layer.</td></tr>
+            <tr><td>Engram</td><td>Hashed n-gram embedding tables added to the hidden state, sharded across ranks by vocabulary (ENP).</td></tr>
+            <tr><td>EPLB</td><td>Expert-parallel load balancer: redundant expert copies placed according to measured load.</td></tr>
+            <tr><td>Placeholder step</td><td>An empty step a rank runs so that collectives stay in sync with ranks that have real work.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="resources">
+      <h2>Other resources</h2>
+      <h3>In the repository</h3>
+      <ul>
+        <li><a href="https://github.com/deepseek-ai/DeepInfer">DeepInfer on GitHub</a>: README, build steps and supported features. The local copy at <code>references/DeepInfer</code> is commit <code>a679bb8</code>.</li>
+        <li><a href="https://github.com/deepseek-ai/DeepInfer/blob/main/doc/inference_deployment_qa.md">Inference deployment Q&amp;A</a>: production E/P/D layout, load balancers, EPLB settings and KV storage.</li>
+        <li><a href="https://github.com/deepseek-ai/DeepInfer/blob/main/doc/images/architecture_overview.png">Production architecture diagram</a>: Recipe, entrypoint, the three load balancers, the services and 3FS.</li>
+        <li><a href="https://github.com/deepseek-ai/DeepInfer/blob/main/examples/README.md">Examples README</a>: offline inference, benchmarks and the PPL regression baselines.</li>
+        <li><a href="https://github.com/deepseek-ai/DeepInfer/blob/main/eval/README.md">Evaluation README</a>: AIME, GPQA and HLE accuracy runs.</li>
+        <li><a href="https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/models/v4_modules/__init__.py">v4_modules/__init__.py</a>: how the model files split into containers, runtime code, operators and topology.</li>
+      </ul>
+      <h3>Related projects</h3>
+      <ul>
+        <li><a href="https://github.com/deepseek-ai/deepseek-recipe">deepseek-recipe</a>: production token encoding and decoding.</li>
+        <li><a href="https://zhuanlan.zhihu.com/p/2095560295930508953">DeepSeek V4.1 Flash inference system (Zhihu)</a>: the design write-up the Q&amp;A builds on.</li>
+        <li><a href="https://zhuanlan.zhihu.com/p/27181462601">DeepSeek-V3 / R1 inference system (Zhihu)</a>: where the DP-attention plus EP-MoE layout started.</li>
+        <li><a href="https://github.com/vllm-project/vllm">vLLM</a>: the codebase DeepInfer grew out of. <code>LLM</code>, <code>LLMEngine</code> and <code>Worker</code> keep its names.</li>
+        <li><a href="https://c4model.com/">The C4 model</a>: the diagram notation used on this page.</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>

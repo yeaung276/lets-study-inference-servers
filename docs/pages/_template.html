@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Page title</title>
+  <meta name="nav-order" content="1">
+  <link rel="stylesheet" href="/assets/docs.css">
+  <script src="/assets/docs.js"></script>
+  <!-- Only for pages with animated figures. Rename to /assets/<page>.ts. -->
+  <script type="module" src="/assets/_template.ts"></script>
+</head>
+<body>
+  <main>
+    <h1>Page title</h1>
+    <p class="lead">This page shows each element the docs support. Copy what you need.</p>
+
+    <section id="text">
+      <h2>Text</h2>
+      <p>A normal paragraph with <strong>bold</strong>, <em>italic</em>, <code>inline code</code> and a <a href="/">link</a>.</p>
+      <h3>Subheading</h3>
+      <p>Subheadings (h3) stay inside the section and are not shown in the sidebar.</p>
+      <blockquote>A blockquote for quotes or side remarks.</blockquote>
+    </section>
+
+    <section id="lists">
+      <h2>Lists</h2>
+      <ul>
+        <li>First item</li>
+        <li>Second item</li>
+        <li>Third item</li>
+      </ul>
+      <ol>
+        <li>Step one</li>
+        <li>Step two</li>
+      </ol>
+    </section>
+
+    <section id="code">
+      <h2>Code</h2>
+<pre><code>fn main() {
+    println!("hello");
+}</code></pre>
+    </section>
+
+    <section id="tables">
+      <h2>Tables</h2>
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Value</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>alpha</td><td>1</td></tr>
+          <tr><td>beta</td><td>2</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="notes">
+      <h2>Notes</h2>
+      <div class="note">A note box for warnings or tips.</div>
+    </section>
+
+    <section id="animated-figures">
+      <h2>Animated figures</h2>
+      <p>
+        An animated figure is a normal figure with a <code>.viz-stage</code> around its SVG. The page script mounts a
+        scene on it, and the scene adds the player bar. Without JavaScript the SVG still shows.
+      </p>
+      <figure class="wide" id="example-viz">
+        <div class="viz-stage">
+          <svg class="diagram" viewBox="0 0 640 220" role="img"
+               aria-label="A KV cache of 64 blocks. Prefill fills 40 blocks quickly, decode adds one block at a time up to 48, and finishing the request frees all but 8.">
+            <text class="t-tag" x="20" y="28">KV CACHE · 64 BLOCKS</text>
+            <text class="t-title" x="620" y="28" text-anchor="end" data-ref="count">64 blocks</text>
+          </svg>
+        </div>
+        <figcaption>Prefill fills blocks in a burst, decode adds one at a time, and finishing a request frees its blocks.</figcaption>
+      </figure>
+    </section>
+  </main>
+</body>
+</html>

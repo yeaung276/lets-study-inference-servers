@@ -1,0 +1,1451 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Concepts</title>
+  <meta name="nav-order" content="100">
+  <link rel="stylesheet" href="/assets/docs.css">
+  <script src="/assets/docs.js"></script>
+  <script type="module" src="/assets/concepts.ts"></script>
+</head>
+<body>
+  <main>
+    <h1>Concepts</h1>
+
+    <!-- ============================================================ -->
+    <section id="parallelism">
+      <h2>Parallelism</h2>
+
+      <!-- ---------------------------------------------------------- -->
+      <h3 id="ranks">Ranks</h3>
+      <p>
+        A large model is often too big or too slow for one GPU. So the inference engine starts one process per GPU, and
+        the processes run the model together. To send data to each other, each process needs an address. That address
+        is a number called its <strong>rank</strong>. Each process has two addresses: a <strong>global rank</strong>, unique across every process on every node, and a
+        <strong>local rank</strong>, unique only within its own node.
+      </p>
+
+      <figure class="wide" id="ranks-viz">
+        <div class="viz-stage">
+          <svg class="diagram" viewBox="0 0 760 390" role="img"
+               aria-label="Two nodes with four GPUs each. On every GPU runs one process that drives it. Node 0's processes have global ranks 0 to 3, node 1's have global ranks 4 to 7. Local ranks are 0 to 3 on each node.">
+            <defs>
+              <marker id="rk-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path class="ah" d="M0,0 L10,5 L0,10 z"/>
+              </marker>
+            </defs>
+
+            <!-- Node 0 -->
+            <rect class="b-ext" x="40" y="20" width="680" height="150" rx="8"/>
+            <text class="t-tag" x="56" y="42">NODE 0</text>
+            <g class="gpu"><rect class="b-gpu" x="56" y="116" width="150" height="40" rx="6"/><text class="t-title t-gpu" x="131" y="141" text-anchor="middle">GPU 0</text></g>
+            <line class="a drive" x1="131" y1="92" x2="131" y2="112" marker-end="url(#rk-ah)"/>
+            <g class="proc" tabindex="0" data-global="0" data-local="0" data-node="0" aria-label="Process on node 0, GPU 0: global rank 0, local rank 0"><rect class="b-proc" x="71" y="56" width="120" height="36" rx="18"/><text class="t-title" x="131" y="79" text-anchor="middle">process</text></g>
+            <g class="gpu"><rect class="b-gpu" x="222" y="116" width="150" height="40" rx="6"/><text class="t-title t-gpu" x="297" y="141" text-anchor="middle">GPU 1</text></g>
+            <line class="a drive" x1="297" y1="92" x2="297" y2="112" marker-end="url(#rk-ah)"/>
+            <g class="proc" tabindex="0" data-global="1" data-local="1" data-node="0" aria-label="Process on node 0, GPU 1: global rank 1, local rank 1"><rect class="b-proc" x="237" y="56" width="120" height="36" rx="18"/><text class="t-title" x="297" y="79" text-anchor="middle">process</text></g>
+            <g class="gpu"><rect class="b-gpu" x="388" y="116" width="150" height="40" rx="6"/><text class="t-title t-gpu" x="463" y="141" text-anchor="middle">GPU 2</text></g>
+            <line class="a drive" x1="463" y1="92" x2="463" y2="112" marker-end="url(#rk-ah)"/>
+            <g class="proc" tabindex="0" data-global="2" data-local="2" data-node="0" aria-label="Process on node 0, GPU 2: global rank 2, local rank 2"><rect class="b-proc" x="403" y="56" width="120" height="36" rx="18"/><text class="t-title" x="463" y="79" text-anchor="middle">process</text></g>
+            <g class="gpu"><rect class="b-gpu" x="554" y="116" width="150" height="40" rx="6"/><text class="t-title t-gpu" x="629" y="141" text-anchor="middle">GPU 3</text></g>
+            <line class="a drive" x1="629" y1="92" x2="629" y2="112" marker-end="url(#rk-ah)"/>
+            <g class="proc" tabindex="0" data-global="3" data-local="3" data-node="0" aria-label="Process on node 0, GPU 3: global rank 3, local rank 3"><rect class="b-proc" x="569" y="56" width="120" height="36" rx="18"/><text class="t-title" x="629" y="79" text-anchor="middle">process</text></g>
+
+            <!-- Node 1 -->
+            <rect class="b-ext" x="40" y="186" width="680" height="150" rx="8"/>
+            <text class="t-tag" x="56" y="208">NODE 1</text>
+            <g class="gpu"><rect class="b-gpu" x="56" y="282" width="150" height="40" rx="6"/><text class="t-title t-gpu" x="131" y="307" text-anchor="middle">GPU 0</text></g>
+            <line class="a drive" x1="131" y1="258" x2="131" y2="278" marker-end="url(#rk-ah)"/>
+            <g class="proc" tabindex="0" data-global="4" data-local="0" data-node="1" aria-label="Process on node 1, GPU 0: global rank 4, local rank 0"><rect class="b-proc" x="71" y="222" width="120" height="36" rx="18"/><text class="t-title" x="131" y="245" text-anchor="middle">process</text></g>
+            <g class="gpu"><rect class="b-gpu" x="222" y="282" width="150" height="40" rx="6"/><text class="t-title t-gpu" x="297" y="307" text-anchor="middle">GPU 1</text></g>
+            <line class="a drive" x1="297" y1="258" x2="297" y2="278" marker-end="url(#rk-ah)"/>
+            <g class="proc" tabindex="0" data-global="5" data-local="1" data-node="1" aria-label="Process on node 1, GPU 1: global rank 5, local rank 1"><rect class="b-proc" x="237" y="222" width="120" height="36" rx="18"/><text class="t-title" x="297" y="245" text-anchor="middle">process</text></g>
+            <g class="gpu"><rect class="b-gpu" x="388" y="282" width="150" height="40" rx="6"/><text class="t-title t-gpu" x="463" y="307" text-anchor="middle">GPU 2</text></g>
+            <line class="a drive" x1="463" y1="258" x2="463" y2="278" marker-end="url(#rk-ah)"/>
+            <g class="proc" tabindex="0" data-global="6" data-local="2" data-node="1" aria-label="Process on node 1, GPU 2: global rank 6, local rank 2"><rect class="b-proc" x="403" y="222" width="120" height="36" rx="18"/><text class="t-title" x="463" y="245" text-anchor="middle">process</text></g>
+            <g class="gpu"><rect class="b-gpu" x="554" y="282" width="150" height="40" rx="6"/><text class="t-title t-gpu" x="629" y="307" text-anchor="middle">GPU 3</text></g>
+            <line class="a drive" x1="629" y1="258" x2="629" y2="278" marker-end="url(#rk-ah)"/>
+            <g class="proc" tabindex="0" data-global="7" data-local="3" data-node="1" aria-label="Process on node 1, GPU 3: global rank 7, local rank 3"><rect class="b-proc" x="569" y="222" width="120" height="36" rx="18"/><text class="t-title" x="629" y="245" text-anchor="middle">process</text></g>
+
+            <!-- Legend -->
+            <g class="legend">
+              <rect class="b-proc" x="150" y="354" width="56" height="22" rx="11"/>
+              <text class="t-lbl" x="214" y="370">process (hover it)</text>
+              <line class="a" x1="350" y1="358" x2="350" y2="374" marker-end="url(#rk-ah)"/>
+              <text class="t-lbl" x="360" y="370">drives</text>
+              <rect class="b-gpu" x="440" y="354" width="56" height="22" rx="5"/>
+              <text class="t-lbl" x="504" y="370">GPU (hardware)</text>
+            </g>
+          </svg>
+        </div>
+        <figcaption>Hover a process to see its global rank and local rank.</figcaption>
+      </figure>
+
+      <!-- ---------------------------------------------------------- -->
+      <h3 id="process-groups">Process groups</h3>
+      <p>
+        A <strong>process group</strong> is the set of ranks that work together for one purpose. One rank can belongs to several groups at once.
+      </p>
+      <p>
+        Ranks in a group talk through <strong>collective operations</strong>: steps that every rank in the group must join. One example is all-reduce, where every rank ends up with the sum of everyone's data. If one rank skips the step, the others wait forever.
+      </p>
+
+      <figure class="wide" id="groups-viz">
+        <div class="viz-stage">
+          <svg class="diagram" viewBox="0 0 760 432" role="img"
+               aria-label="The same two nodes with four GPUs and four processes each. Step 1, tensor parallel: each node's processes form a TP group, {0, 1, 2, 3} and {4, 5, 6, 7}. Step 2, data parallel: processes in the same position on each node form a DP group, {0, 4}, {1, 5}, {2, 6} and {3, 7}. Step 3, expert parallel: all eight processes form one EP group.">
+            <defs>
+              <marker id="pg-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path class="ah" d="M0,0 L10,5 L0,10 z"/>
+              </marker>
+            </defs>
+
+            <!-- Node 0 -->
+            <rect class="b-ext" x="40" y="20" width="680" height="150" rx="8"/>
+            <text class="t-tag" x="56" y="42">NODE 0</text>
+            <g class="gpu"><rect class="b-gpu" x="56" y="116" width="150" height="40" rx="6"/><text class="t-title t-gpu" x="131" y="141" text-anchor="middle">GPU 0</text></g>
+            <line class="a drive" x1="131" y1="92" x2="131" y2="112" marker-end="url(#pg-ah)"/>
+            <g class="proc" tabindex="0" data-global="0" data-local="0" data-node="0" aria-label="Process on node 0, GPU 0: global rank 0, local rank 0"><rect class="b-proc" x="71" y="56" width="120" height="36" rx="18"/><text class="t-title" x="131" y="79" text-anchor="middle">process</text></g>
+            <g class="gpu"><rect class="b-gpu" x="222" y="116" width="150" height="40" rx="6"/><text class="t-title t-gpu" x="297" y="141" text-anchor="middle">GPU 1</text></g>
+            <line class="a drive" x1="297" y1="92" x2="297" y2="112" marker-end="url(#pg-ah)"/>
+            <g class="proc" tabindex="0" data-global="1" data-local="1" data-node="0" aria-label="Process on node 0, GPU 1: global rank 1, local rank 1"><rect class="b-proc" x="237" y="56" width="120" height="36" rx="18"/><text class="t-title" x="297" y="79" text-anchor="middle">process</text></g>
+            <g class="gpu"><rect class="b-gpu" x="388" y="116" width="150" height="40" rx="6"/><text class="t-title t-gpu" x="463" y="141" text-anchor="middle">GPU 2</text></g>
+            <line class="a drive" x1="463" y1="92" x2="463" y2="112" marker-end="url(#pg-ah)"/>
+            <g class="proc" tabindex="0" data-global="2" data-local="2" data-node="0" aria-label="Process on node 0, GPU 2: global rank 2, local rank 2"><rect class="b-proc" x="403" y="56" width="120" height="36" rx="18"/><text class="t-title" x="463" y="79" text-anchor="middle">process</text></g>
+            <g class="gpu"><rect class="b-gpu" x="554" y="116" width="150" height="40" rx="6"/><text class="t-title t-gpu" x="629" y="141" text-anchor="middle">GPU 3</text></g>
+            <line class="a drive" x1="629" y1="92" x2="629" y2="112" marker-end="url(#pg-ah)"/>
+            <g class="proc" tabindex="0" data-global="3" data-local="3" data-node="0" aria-label="Process on node 0, GPU 3: global rank 3, local rank 3"><rect class="b-proc" x="569" y="56" width="120" height="36" rx="18"/><text class="t-title" x="629" y="79" text-anchor="middle">process</text></g>
+
+            <!-- Node 1 -->
+            <rect class="b-ext" x="40" y="186" width="680" height="150" rx="8"/>
+            <text class="t-tag" x="56" y="208">NODE 1</text>
+            <g class="gpu"><rect class="b-gpu" x="56" y="282" width="150" height="40" rx="6"/><text class="t-title t-gpu" x="131" y="307" text-anchor="middle">GPU 0</text></g>
+            <line class="a drive" x1="131" y1="258" x2="131" y2="278" marker-end="url(#pg-ah)"/>
+            <g class="proc" tabindex="0" data-global="4" data-local="0" data-node="1" aria-label="Process on node 1, GPU 0: global rank 4, local rank 0"><rect class="b-proc" x="71" y="222" width="120" height="36" rx="18"/><text class="t-title" x="131" y="245" text-anchor="middle">process</text></g>
+            <g class="gpu"><rect class="b-gpu" x="222" y="282" width="150" height="40" rx="6"/><text class="t-title t-gpu" x="297" y="307" text-anchor="middle">GPU 1</text></g>
+            <line class="a drive" x1="297" y1="258" x2="297" y2="278" marker-end="url(#pg-ah)"/>
+            <g class="proc" tabindex="0" data-global="5" data-local="1" data-node="1" aria-label="Process on node 1, GPU 1: global rank 5, local rank 1"><rect class="b-proc" x="237" y="222" width="120" height="36" rx="18"/><text class="t-title" x="297" y="245" text-anchor="middle">process</text></g>
+            <g class="gpu"><rect class="b-gpu" x="388" y="282" width="150" height="40" rx="6"/><text class="t-title t-gpu" x="463" y="307" text-anchor="middle">GPU 2</text></g>
+            <line class="a drive" x1="463" y1="258" x2="463" y2="278" marker-end="url(#pg-ah)"/>
+            <g class="proc" tabindex="0" data-global="6" data-local="2" data-node="1" aria-label="Process on node 1, GPU 2: global rank 6, local rank 2"><rect class="b-proc" x="403" y="222" width="120" height="36" rx="18"/><text class="t-title" x="463" y="245" text-anchor="middle">process</text></g>
+            <g class="gpu"><rect class="b-gpu" x="554" y="282" width="150" height="40" rx="6"/><text class="t-title t-gpu" x="629" y="307" text-anchor="middle">GPU 3</text></g>
+            <line class="a drive" x1="629" y1="258" x2="629" y2="278" marker-end="url(#pg-ah)"/>
+            <g class="proc" tabindex="0" data-global="7" data-local="3" data-node="1" aria-label="Process on node 1, GPU 3: global rank 7, local rank 3"><rect class="b-proc" x="569" y="222" width="120" height="36" rx="18"/><text class="t-title" x="629" y="245" text-anchor="middle">process</text></g>
+
+            <!-- Step 1: TP groups, one per node -->
+            <g class="grp tp" style="opacity:0">
+              <rect class="b-group" x="52" y="50" width="656" height="110" rx="10"/>
+              <text class="t-lbl t-hot" x="704" y="42" text-anchor="end">Process group for TP {0, 1, 2, 3}</text>
+              <rect class="b-group" x="52" y="216" width="656" height="110" rx="10"/>
+              <text class="t-lbl t-hot" x="704" y="208" text-anchor="end">Process group for TP {4, 5, 6, 7}</text>
+            </g>
+
+            <!-- Step 2: DP groups, same position on each node -->
+            <g class="grp dp" style="opacity:0">
+              <rect class="b-group" x="52" y="50" width="158" height="276" rx="10"/>
+              <text class="t-lbl t-hot" x="131" y="364" text-anchor="middle"><tspan x="131">Process group for DP</tspan><tspan x="131" dy="14">{0, 4}</tspan></text>
+              <rect class="b-group" x="218" y="50" width="158" height="276" rx="10"/>
+              <text class="t-lbl t-hot" x="297" y="364" text-anchor="middle"><tspan x="297">Process group for DP</tspan><tspan x="297" dy="14">{1, 5}</tspan></text>
+              <rect class="b-group" x="384" y="50" width="158" height="276" rx="10"/>
+              <text class="t-lbl t-hot" x="463" y="364" text-anchor="middle"><tspan x="463">Process group for DP</tspan><tspan x="463" dy="14">{2, 6}</tspan></text>
+              <rect class="b-group" x="550" y="50" width="158" height="276" rx="10"/>
+              <text class="t-lbl t-hot" x="629" y="364" text-anchor="middle"><tspan x="629">Process group for DP</tspan><tspan x="629" dy="14">{3, 7}</tspan></text>
+            </g>
+
+            <!-- Step 3: one EP group with every rank -->
+            <g class="grp ep">
+              <rect class="b-group" x="28" y="10" width="704" height="336" rx="12"/>
+              <text class="t-lbl t-hot" x="380" y="366" text-anchor="middle">Process group for EP {0, 1, 2, 3, 4, 5, 6, 7}</text>
+            </g>
+
+            <!-- Legend -->
+            <g class="legend">
+              <rect class="b-proc" x="95" y="400" width="56" height="22" rx="11"/>
+              <text class="t-lbl" x="159" y="416">process (hover it)</text>
+              <line class="a" x1="295" y1="404" x2="295" y2="420" marker-end="url(#pg-ah)"/>
+              <text class="t-lbl" x="305" y="416">drives</text>
+              <rect class="b-gpu" x="375" y="400" width="56" height="22" rx="5"/>
+              <text class="t-lbl" x="439" y="416">GPU (hardware)</text>
+              <rect class="b-group" x="565" y="400" width="56" height="22" rx="6"/>
+              <text class="t-lbl" x="629" y="416">process group</text>
+            </g>
+          </svg>
+        </div>
+        <figcaption>Step 1: tensor parallel (TP) groups. Step 2: data parallel (DP) groups. Step 3: the expert parallel (EP) group. Hover a process to see its global rank and local rank.</figcaption>
+      </figure>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="moe">
+      <h2>Collective operations</h2>
+
+      <!-- ---------------------------------------------------------- -->
+      <h3 id="moe-expert-all-to-all">MoE all-to-all</h3>
+
+      <p>
+        To understand all-to-all, we first need to understand <strong>expert parallelism (EP)</strong>. In a MoE layer,
+        each expert is an <strong>FFN</strong>. EP distributes these experts across <strong>ranks</strong>, where a
+        rank can be a node or a GPU and can hold multiple experts. When a token's activation reaches the MoE layer, a router
+        selects the most relevant experts, and the token vector is sent to the ranks that hold them.
+      </p>
+      <p>
+        The <strong>all-to-all operation</strong> enables this exchange of data. Because we don't know which experts will
+        be chosen until the router sees the activation, every rank must be able to send data to every other rank, hence
+        the first "all". After each expert computes its output, the result is sent back to the token's original rank,
+        hence the second "all".
+      </p>
+
+      <figure class="wide" id="a2a-viz">
+        <div class="viz-stage">
+        <svg class="diagram" viewBox="0 0 760 600" role="img"
+             aria-label="MoE expert all-to-all. A sequence of six input tokens enters the layer. Token t3 goes to the router, which picks experts E2 and E5. An all-to-all dispatch sends the token to rank 1, which holds E2, and rank 2, which holds E5. Four ranks each hold two experts, E0 to E7. An all-to-all combine returns the expert outputs, which are summed into output token t3 prime in the output sequence.">
+          <defs>
+            <marker id="a2a-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path class="ah" d="M0,0 L10,5 L0,10 z"/>
+            </marker>
+            <marker id="a2a-ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path class="ah-hot" d="M0,0 L10,5 L0,10 z"/>
+            </marker>
+          </defs>
+
+          <!-- Input token sequence -->
+          <text class="t-tag" x="158" y="24">INPUT TOKENS</text>
+          <rect class="b" x="158" y="34" width="64" height="36" rx="6"/>
+          <text class="t-title" x="190" y="57" text-anchor="middle">t1</text>
+          <rect class="b" x="234" y="34" width="64" height="36" rx="6"/>
+          <text class="t-title" x="266" y="57" text-anchor="middle">t2</text>
+          <rect class="b-focus" x="310" y="34" width="64" height="36" rx="6"/>
+          <text class="t-title t-hot" x="342" y="57" text-anchor="middle">t3</text>
+          <rect class="b" x="386" y="34" width="64" height="36" rx="6"/>
+          <text class="t-title" x="418" y="57" text-anchor="middle">t4</text>
+          <rect class="b" x="462" y="34" width="64" height="36" rx="6"/>
+          <text class="t-title" x="494" y="57" text-anchor="middle">t5</text>
+          <rect class="b" x="538" y="34" width="64" height="36" rx="6"/>
+          <text class="t-title" x="570" y="57" text-anchor="middle">t6</text>
+
+          <!-- t3 to router -->
+          <line class="a a-hot" x1="342" y1="70" x2="342" y2="108" marker-end="url(#a2a-ah-hot)"/>
+          <text class="t-lbl" x="334" y="94" text-anchor="end">hidden state of t3</text>
+
+          <!-- Router -->
+          <rect class="b" x="290" y="110" width="180" height="48" rx="8"/>
+          <text class="t-title" x="380" y="130" text-anchor="middle">Router</text>
+          <text class="t-sub" x="380" y="147" text-anchor="middle">scores experts, keeps top-2</text>
+
+          <!-- Router to dispatch -->
+          <line class="a a-hot" x1="380" y1="158" x2="380" y2="190" marker-end="url(#a2a-ah-hot)"/>
+          <text class="t-lbl t-hot" x="388" y="179">t3 → E2, E5</text>
+
+          <!-- All-to-all dispatch -->
+          <rect class="b-focus" x="40" y="192" width="680" height="50" rx="8"/>
+          <text class="t-big" x="380" y="214" text-anchor="middle">All-to-all dispatch</text>
+          <text class="t-sub" x="380" y="232" text-anchor="middle">every rank sends each token's vector to the ranks that hold its chosen experts</text>
+
+          <!-- Dispatch to ranks -->
+          <line class="a" x1="116" y1="242" x2="116" y2="288" marker-end="url(#a2a-ah)"/>
+          <line class="a a-hot" x1="292" y1="242" x2="292" y2="288" marker-end="url(#a2a-ah-hot)"/>
+          <line class="a a-hot" x1="468" y1="242" x2="468" y2="288" marker-end="url(#a2a-ah-hot)"/>
+          <line class="a" x1="644" y1="242" x2="644" y2="288" marker-end="url(#a2a-ah)"/>
+
+          <!-- Ranks -->
+          <rect class="b-ext" x="41" y="290" width="150" height="110" rx="8"/>
+          <text class="t-tag" x="116" y="308" text-anchor="middle">RANK 0 · GPU 0</text>
+          <rect class="b" x="59" y="326" width="52" height="44" rx="5"/>
+          <text class="t-title" x="85" y="353" text-anchor="middle">E0</text>
+          <rect class="b" x="121" y="326" width="52" height="44" rx="5"/>
+          <text class="t-title" x="147" y="353" text-anchor="middle">E1</text>
+
+          <rect class="b-ext" x="217" y="290" width="150" height="110" rx="8"/>
+          <text class="t-tag" x="292" y="308" text-anchor="middle">RANK 1 · GPU 1</text>
+          <rect class="b-focus" x="235" y="326" width="52" height="44" rx="5"/>
+          <text class="t-title t-hot" x="261" y="353" text-anchor="middle">E2</text>
+          <rect class="b" x="297" y="326" width="52" height="44" rx="5"/>
+          <text class="t-title" x="323" y="353" text-anchor="middle">E3</text>
+
+          <rect class="b-ext" x="393" y="290" width="150" height="110" rx="8"/>
+          <text class="t-tag" x="468" y="308" text-anchor="middle">RANK 2 · GPU 2</text>
+          <rect class="b" x="411" y="326" width="52" height="44" rx="5"/>
+          <text class="t-title" x="437" y="353" text-anchor="middle">E4</text>
+          <rect class="b-focus" x="473" y="326" width="52" height="44" rx="5"/>
+          <text class="t-title t-hot" x="499" y="353" text-anchor="middle">E5</text>
+
+          <rect class="b-ext" x="569" y="290" width="150" height="110" rx="8"/>
+          <text class="t-tag" x="644" y="308" text-anchor="middle">RANK 3 · GPU 3</text>
+          <rect class="b" x="587" y="326" width="52" height="44" rx="5"/>
+          <text class="t-title" x="613" y="353" text-anchor="middle">E6</text>
+          <rect class="b" x="649" y="326" width="52" height="44" rx="5"/>
+          <text class="t-title" x="675" y="353" text-anchor="middle">E7</text>
+
+          <text class="t-sub" x="116" y="390" text-anchor="middle">other tokens</text>
+          <text class="t-sub" x="644" y="390" text-anchor="middle">other tokens</text>
+          <text class="t-sub t-hot" x="292" y="390" text-anchor="middle">runs E2 on t3</text>
+          <text class="t-sub t-hot" x="468" y="390" text-anchor="middle">runs E5 on t3</text>
+
+          <!-- Ranks to combine -->
+          <line class="a" x1="116" y1="400" x2="116" y2="438" marker-end="url(#a2a-ah)"/>
+          <line class="a a-hot" x1="292" y1="400" x2="292" y2="438" marker-end="url(#a2a-ah-hot)"/>
+          <line class="a a-hot" x1="468" y1="400" x2="468" y2="438" marker-end="url(#a2a-ah-hot)"/>
+          <line class="a" x1="644" y1="400" x2="644" y2="438" marker-end="url(#a2a-ah)"/>
+
+          <!-- All-to-all combine -->
+          <rect class="b-focus" x="40" y="440" width="680" height="50" rx="8"/>
+          <text class="t-big" x="380" y="462" text-anchor="middle">All-to-all combine</text>
+          <text class="t-sub" x="380" y="480" text-anchor="middle">expert outputs go back to each token's home rank and are summed, weighted by router scores</text>
+
+          <!-- Combine to output -->
+          <line class="a a-hot" x1="342" y1="490" x2="342" y2="550" marker-end="url(#a2a-ah-hot)"/>
+          <text class="t-lbl" x="350" y="524">t3′ = w₂·E2(t3) + w₅·E5(t3)</text>
+
+          <!-- Output token sequence -->
+          <text class="t-tag" x="158" y="542">OUTPUT TOKENS</text>
+          <rect class="b" x="158" y="552" width="64" height="36" rx="6"/>
+          <text class="t-title" x="190" y="575" text-anchor="middle">t1′</text>
+          <rect class="b" x="234" y="552" width="64" height="36" rx="6"/>
+          <text class="t-title" x="266" y="575" text-anchor="middle">t2′</text>
+          <rect class="b-focus" x="310" y="552" width="64" height="36" rx="6"/>
+          <text class="t-title t-hot" x="342" y="575" text-anchor="middle">t3′</text>
+          <rect class="b" x="386" y="552" width="64" height="36" rx="6"/>
+          <text class="t-title" x="418" y="575" text-anchor="middle">t4′</text>
+          <rect class="b" x="462" y="552" width="64" height="36" rx="6"/>
+          <text class="t-title" x="494" y="575" text-anchor="middle">t5′</text>
+          <rect class="b" x="538" y="552" width="64" height="36" rx="6"/>
+          <text class="t-title" x="570" y="575" text-anchor="middle">t6′</text>
+        </svg>
+        </div>
+        <figcaption>
+          The animation follows DeepEP's direct kernels (<code>dispatch_impl</code> and <code>combine_impl</code>) with 4 ranks, 8 experts and top-2 routing.
+          Every pair of ranks has a direct link. DeepEP uses these kernels when all ranks share one NVLink domain.
+          DeepInfer on GPU does not run them in that setup: inside one NVLink domain it uses DeepGEMM's fused mega-MoE kernel instead,
+          and when the ranks span several nodes, DeepEP switches to its hybrid kernels (RDMA between nodes, NVLink inside a node). Each rank's tokens get their own letter (R0: a1–a4, R1: b1–b4, R2: c1–c4,
+          R3: d1–d4) because they belong to that rank's own requests. The blue chip is token a1. Use the step buttons to move one step at a time.
+        </figcaption>
+      </figure>
+
+      <h4>Variables in the animation</h4>
+      <p>Each rank keeps its own copy. "Written by" says who changes the value: a sender writes straight into the receiver's memory.</p>
+      <div class="table-wrap">
+        <table>
+          <colgroup><col style="width: 13rem"><col></colgroup>
+          <thead><tr><th>Name in the figure</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>topk_idx</code></td><td>The 2 experts each of this rank's tokens chose</td></tr>
+            <tr><td><code>rank_count</code></td><td>How many tokens this rank sends to each rank, counting a token once per rank</td></tr>
+            <tr><td><code>expert_count</code></td><td>How many tokens this rank sends to each expert</td></tr>
+            <tr><td><code>dst_slot</code></td><td>For each token, the destination rank and the slot it reserved there (<code>R1#0</code> = rank 1, slot 0)</td></tr>
+            <tr><td><code>recv_rank_count</code></td><td>How many tokens each sender is sending to this rank</td></tr>
+            <tr><td><code>recv_expert_count</code></td><td>How many rows each local expert will get</td></tr>
+            <tr><td><code>psum_rank</code></td><td>Running total of <code>recv_rank_count</code>: where each sender's rows end</td></tr>
+            <tr><td><code>psum_expert</code></td><td>Where each local expert's group starts in <code>recv_x</code></td></tr>
+            <tr><td><code>recv_buffer</code></td><td>Dispatch: rows are senders, columns are slots. Combine reuses the same memory, and its rows depend on the rank count. With at most as many ranks as top-k choices, rows are the expert ranks. With more ranks, as here (4 ranks, top-2), rows are top-k slots: a partial goes to the row of the token's first choice that its sender holds. Columns are this rank's tokens</td></tr>
+            <tr><td><code>recv_x</code></td><td>Received rows grouped by local expert, the input of the grouped GEMM</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="scheduling">
+      <h2>Scheduling</h2>
+
+      <!-- ---------------------------------------------------------- -->
+      <h3 id="zos">Zero-overhead scheduling (ZOS)</h3>
+      <p>
+        An inference engine generates text in <strong>decode steps</strong>: each step produces one new token for every
+        running request. Each step needs both CPU and GPU work. The CPU <strong>schedules</strong> the step (picks the requests and builds their inputs)
+        and later <strong>post-processes</strong> it (appends the new tokens, checks for stop tokens, sends outputs to
+        clients). The GPU runs the <strong>forward</strong> pass and <strong>samples</strong> the next tokens.
+      </p>
+      <p>
+        <strong>Without ZOS</strong>, the two sides take turns, so every step the GPU sits idle while the CPU
+        post-processes one step and schedules the next. <strong>Zero-overhead scheduling (ZOS)</strong> overlaps them:
+        the CPU schedules step N+1 while the GPU still runs step N, and post-processes step N while the GPU runs step
+        N+1. The GPU never waits for the CPU. The catch: step N+1 is built before the CPU has read step N's tokens, so
+        the GPU fills them in itself.
+      </p>
+
+      <figure class="wide" id="zos-viz">
+        <div class="viz-stage">
+          <svg class="diagram" viewBox="0 0 1040 608" role="img" aria-label="Profile of zero-overhead scheduling. A CPU lane and a GPU lane show each operation over three decode steps; below, CPU and GPU memory show token ids moving between them, with the CUDA stream queue in between.">
+          <defs>
+          <marker id="zos-static-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path class="ah" d="M0,0 L10,5 L0,10 z">
+          </path>
+          </marker>
+          <marker id="zos-static-ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path class="ah-hot" d="M0,0 L10,5 L0,10 z">
+          </path>
+          </marker>
+          <marker id="zos-static-ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path class="ah-gpu" d="M0,0 L10,5 L0,10 z">
+          </path>
+          </marker>
+          <clipPath id="zos-static-clip">
+          <rect x="100" y="0" width="920" height="160">
+          </rect>
+          </clipPath>
+          <clipPath id="zos-static-win">
+          <rect x="100" y="0" width="920" height="160">
+          </rect>
+          </clipPath>
+          </defs>
+          <rect class="b-gpu" x="100" y="30" width="920" height="36" rx="4">
+          </rect>
+          <text class="t-title t-gpu" x="24" y="52">CPU</text>
+          <rect class="b-gpu" x="100" y="108" width="920" height="36" rx="4">
+          </rect>
+          <text class="t-title t-gpu" x="24" y="130">GPU</text>
+          <path class="a" d="M103,151 V156 H505.88888888888886 V151" stroke-width="1">
+          </path>
+          <text class="t-sub" x="304.44444444444446" y="170" text-anchor="middle">step N</text>
+          <path class="a" d="M511.88888888888886,151 V156 H914.7777777777777 V151" stroke-width="1">
+          </path>
+          <text class="t-sub" x="713.3333333333333" y="170" text-anchor="middle">step N+1</text>
+          <path class="a" d="M920.7777777777777,151 V156 H1017 V151" stroke-width="1">
+          </path>
+          <text class="t-sub" x="968.8888888888889" y="170" text-anchor="middle">step N+2</text>
+          <line class="a a-out" x1="266.1111111111111" y1="66" x2="406.66666666666663" y2="108" marker-end="url(#zos-static-ah)" opacity="1">
+          </line>
+          <line class="a a-out" x1="432.22222222222223" y1="66" x2="508.88888888888886" y2="108" marker-end="url(#zos-static-ah)" opacity="1">
+          </line>
+          <line class="a a-out" x1="675" y1="66" x2="815.5555555555555" y2="108" marker-end="url(#zos-static-ah)" opacity="1">
+          </line>
+          <line class="a a-out" x1="841.1111111111111" y1="66" x2="917.7777777777777" y2="108" marker-end="url(#zos-static-ah)" opacity="1">
+          </line>
+          <g clip-path="url(#zos-static-win)">
+          <g display="none">
+          <rect class="b-out" x="101" y="111" width="49.111111111111114" height="30" rx="3">
+          </rect>
+          <text class="t-mono t-muted" x="125.55555555555556" y="130" text-anchor="middle" display="none">queued</text>
+          </g>
+          <g display="none">
+          <rect class="b-out" x="152.11111111111111" y="111" width="253.55555555555551" height="30" rx="3">
+          </rect>
+          <text class="t-mono t-muted" x="278.88888888888886" y="130" text-anchor="middle" display="none">queued</text>
+          </g>
+          <g display="none">
+          <rect class="b-out" x="407.66666666666663" y="111" width="100.22222222222223" height="30" rx="3">
+          </rect>
+          <text class="t-mono t-muted" x="457.7777777777777" y="130" text-anchor="middle" display="none">queued</text>
+          </g>
+          <g display="none">
+          <rect class="b-out" x="509.88888888888886" y="111" width="49.11111111111114" height="30" rx="3">
+          </rect>
+          <text class="t-mono t-muted" x="534.4444444444445" y="130" text-anchor="middle" display="none">queued</text>
+          </g>
+          <g display="none">
+          <rect class="b-out" x="561" y="111" width="253.55555555555554" height="30" rx="3">
+          </rect>
+          <text class="t-mono t-muted" x="687.7777777777778" y="130" text-anchor="middle" display="none">queued</text>
+          </g>
+          <g display="none">
+          <rect class="b-out" x="816.5555555555555" y="111" width="100.22222222222217" height="30" rx="3">
+          </rect>
+          <text class="t-mono t-muted" x="866.6666666666666" y="130" text-anchor="middle" display="none">queued</text>
+          </g>
+          <g display="none">
+          <rect class="b-out" x="918.7777777777777" y="111" width="49.1111111111112" height="30" rx="3">
+          </rect>
+          <text class="t-mono t-muted" x="943.3333333333333" y="130" text-anchor="middle" display="none">queued</text>
+          </g>
+          <g display="inline">
+          <rect class="b-out" x="969.8888888888889" y="111" width="49.111111111111086" height="30" rx="3">
+          </rect>
+          <text class="t-mono t-muted" x="994.4444444444445" y="130" text-anchor="middle" display="none">queued</text>
+          </g>
+          </g>
+          <g clip-path="url(#zos-static-clip)">
+          <g>
+          <rect class="b" x="101" y="33" width="100.22222222222223" height="30" rx="3">
+          </rect>
+          <text class="t-chip" x="151.11111111111111" y="46" text-anchor="middle">post-process</text>
+          <text class="t-mono t-muted" x="151.11111111111111" y="58" text-anchor="middle">N−1</text>
+          </g>
+          <g>
+          <rect class="b" x="203.22222222222223" y="33" width="61.88888888888886" height="30" rx="3">
+          </rect>
+          <text class="t-chip" x="234.16666666666666" y="46" text-anchor="middle">launch</text>
+          <text class="t-mono t-muted" x="234.16666666666666" y="58" text-anchor="middle">sample N</text>
+          </g>
+          <g>
+          <rect class="b" x="267.1111111111111" y="33" width="74.66666666666669" height="30" rx="3">
+          </rect>
+          <text class="t-chip" x="304.44444444444446" y="46" text-anchor="middle">schedule</text>
+          <text class="t-mono t-muted" x="304.44444444444446" y="58" text-anchor="middle">N+1</text>
+          </g>
+          <g>
+          <rect class="b" x="343.77777777777777" y="33" width="87.44444444444446" height="30" rx="3">
+          </rect>
+          <text class="t-chip" x="387.5" y="46" text-anchor="middle">prep + launch</text>
+          <text class="t-mono t-muted" x="387.5" y="58" text-anchor="middle">N+1</text>
+          </g>
+          <g>
+          <rect class="b-out" x="433.22222222222223" y="33" width="74.66666666666663" height="30" rx="3">
+          </rect>
+          <text class="t-chip t-muted" x="470.55555555555554" y="46" text-anchor="middle">wait for</text>
+          <text class="t-mono t-muted" x="470.55555555555554" y="58" text-anchor="middle">sample N</text>
+          </g>
+          <g class="hl-gpu">
+          <rect class="b" x="101" y="111" width="49.111111111111114" height="30" rx="3">
+          </rect>
+          <text class="t-chip" x="125.55555555555556" y="124" text-anchor="middle">inputs</text>
+          <text class="t-mono t-muted" x="125.55555555555556" y="136" text-anchor="middle">N</text>
+          </g>
+          <g class="hl-gpu">
+          <rect class="b" x="152.11111111111111" y="111" width="253.55555555555551" height="30" rx="3">
+          </rect>
+          <text class="t-chip" x="278.88888888888886" y="124" text-anchor="middle">forward</text>
+          <text class="t-mono t-muted" x="278.88888888888886" y="136" text-anchor="middle">N</text>
+          </g>
+          <g class="hl-gpu">
+          <rect class="b" x="407.66666666666663" y="111" width="100.22222222222223" height="30" rx="3">
+          </rect>
+          <text class="t-chip" x="457.7777777777777" y="124" text-anchor="middle">sample</text>
+          <text class="t-mono t-muted" x="457.7777777777777" y="136" text-anchor="middle">N</text>
+          </g>
+          <g>
+          <rect class="b" x="509.88888888888886" y="33" width="100.22222222222223" height="30" rx="3">
+          </rect>
+          <text class="t-chip" x="560" y="46" text-anchor="middle">post-process</text>
+          <text class="t-mono t-muted" x="560" y="58" text-anchor="middle">N</text>
+          </g>
+          <g>
+          <rect class="b" x="612.1111111111111" y="33" width="61.888888888888914" height="30" rx="3">
+          </rect>
+          <text class="t-chip" x="643.0555555555555" y="46" text-anchor="middle">launch</text>
+          <text class="t-mono t-muted" x="643.0555555555555" y="58" text-anchor="middle">sample N+1</text>
+          </g>
+          <g>
+          <rect class="b" x="676" y="33" width="74.66666666666674" height="30" rx="3">
+          </rect>
+          <text class="t-chip" x="713.3333333333334" y="46" text-anchor="middle">schedule</text>
+          <text class="t-mono t-muted" x="713.3333333333334" y="58" text-anchor="middle">N+2</text>
+          </g>
+          <g>
+          <rect class="b" x="752.6666666666667" y="33" width="87.44444444444434" height="30" rx="3">
+          </rect>
+          <text class="t-chip" x="796.3888888888889" y="46" text-anchor="middle">prep + launch</text>
+          <text class="t-mono t-muted" x="796.3888888888889" y="58" text-anchor="middle">N+2</text>
+          </g>
+          <g>
+          <rect class="b-out" x="842.1111111111111" y="33" width="74.66666666666663" height="30" rx="3">
+          </rect>
+          <text class="t-chip t-muted" x="879.4444444444443" y="46" text-anchor="middle">wait for</text>
+          <text class="t-mono t-muted" x="879.4444444444443" y="58" text-anchor="middle">sample N+1</text>
+          </g>
+          <g class="hl-gpu">
+          <rect class="b" x="509.88888888888886" y="111" width="49.11111111111114" height="30" rx="3">
+          </rect>
+          <text class="t-chip" x="534.4444444444445" y="124" text-anchor="middle">inputs</text>
+          <text class="t-mono t-muted" x="534.4444444444445" y="136" text-anchor="middle">N+1</text>
+          </g>
+          <g class="hl-gpu">
+          <rect class="b" x="561" y="111" width="253.55555555555554" height="30" rx="3">
+          </rect>
+          <text class="t-chip" x="687.7777777777778" y="124" text-anchor="middle">forward</text>
+          <text class="t-mono t-muted" x="687.7777777777778" y="136" text-anchor="middle">N+1</text>
+          </g>
+          <g class="hl-gpu">
+          <rect class="b" x="816.5555555555555" y="111" width="100.22222222222217" height="30" rx="3">
+          </rect>
+          <text class="t-chip" x="866.6666666666666" y="124" text-anchor="middle">sample</text>
+          <text class="t-mono t-muted" x="866.6666666666666" y="136" text-anchor="middle">N+1</text>
+          </g>
+          <g>
+          <rect class="b" x="918.7777777777777" y="33" width="100.22222222222229" height="30" rx="3">
+          </rect>
+          <text class="t-chip" x="968.8888888888889" y="46" text-anchor="middle">post-process</text>
+          <text class="t-mono t-muted" x="968.8888888888889" y="58" text-anchor="middle">N+1</text>
+          </g>
+          <g class="hl-gpu">
+          <rect class="b" x="918.7777777777777" y="111" width="49.1111111111112" height="30" rx="3">
+          </rect>
+          <text class="t-chip" x="943.3333333333333" y="124" text-anchor="middle">inputs</text>
+          <text class="t-mono t-muted" x="943.3333333333333" y="136" text-anchor="middle">N+2</text>
+          </g>
+          <g class="hl-gpu">
+          <rect class="b-focus" x="969.8888888888889" y="111" width="49.111111111111086" height="30" rx="3">
+          </rect>
+          <text class="t-chip t-hot" x="994.4444444444445" y="124" text-anchor="middle">forward</text>
+          <text class="t-mono t-muted" x="994.4444444444445" y="136" text-anchor="middle">N+2</text>
+          </g>
+          </g>
+          <line class="a a-hot" x1="1020" y1="22" x2="1020" y2="150" opacity="0">
+          </line>
+          <rect class="b-ext" x="428" y="282" width="124" height="210" rx="6">
+          </rect>
+          <text class="t-title" x="490" y="298" text-anchor="middle">CUDA stream</text>
+          <text class="t-mono t-muted" x="490" y="313" text-anchor="middle">head: GPU runs it →</text>
+          <text class="t-mono t-muted" x="490" y="484" text-anchor="middle">→ tail: CPU appends</text>
+          <g>
+          <g class="hl-gpu" display="none" opacity="1">
+          <rect width="112" height="32" rx="3" x="434" y="322" class="b-out">
+          </rect>
+          <text text-anchor="middle" x="490" y="336" class="t-chip">inputs</text>
+          <text text-anchor="middle" class="t-mono t-muted" x="490" y="348">N</text>
+          </g>
+          <g class="hl-gpu" display="none" opacity="1">
+          <rect width="112" height="32" rx="3" x="434" y="360" class="b-out">
+          </rect>
+          <text text-anchor="middle" x="490" y="374" class="t-chip">forward</text>
+          <text text-anchor="middle" class="t-mono t-muted" x="490" y="386">N</text>
+          </g>
+          <g class="hl-gpu" display="none">
+          <rect width="112" height="32" rx="3">
+          </rect>
+          <text text-anchor="middle">sample</text>
+          <text text-anchor="middle" class="t-mono t-muted">N</text>
+          </g>
+          <g class="hl-gpu" display="none">
+          <rect width="112" height="32" rx="3">
+          </rect>
+          <text text-anchor="middle">event</text>
+          <text text-anchor="middle" class="t-mono t-muted">sample N done</text>
+          </g>
+          <g class="hl-gpu" display="none">
+          <rect width="112" height="32" rx="3">
+          </rect>
+          <text text-anchor="middle">inputs</text>
+          <text text-anchor="middle" class="t-mono t-muted">N+1</text>
+          </g>
+          <g class="hl-gpu" display="none">
+          <rect width="112" height="32" rx="3">
+          </rect>
+          <text text-anchor="middle">forward</text>
+          <text text-anchor="middle" class="t-mono t-muted">N+1</text>
+          </g>
+          <g class="hl-gpu" display="none">
+          <rect width="112" height="32" rx="3">
+          </rect>
+          <text text-anchor="middle">sample</text>
+          <text text-anchor="middle" class="t-mono t-muted">N+1</text>
+          </g>
+          <g class="hl-gpu" display="none">
+          <rect width="112" height="32" rx="3">
+          </rect>
+          <text text-anchor="middle">event</text>
+          <text text-anchor="middle" class="t-mono t-muted">sample N+1 done</text>
+          </g>
+          <g class="hl-gpu" display="none">
+          <rect width="112" height="32" rx="3">
+          </rect>
+          <text text-anchor="middle">inputs</text>
+          <text text-anchor="middle" class="t-mono t-muted">N+2</text>
+          </g>
+          <g class="hl-gpu" display="inline" opacity="1">
+          <rect width="112" height="32" rx="3" x="434" y="322" class="b-focus">
+          </rect>
+          <text text-anchor="middle" x="490" y="336" class="t-chip t-hot">forward</text>
+          <text text-anchor="middle" class="t-mono t-muted" x="490" y="348">N+2</text>
+          </g>
+          <g class="hl-gpu" display="none">
+          <rect width="112" height="32" rx="3">
+          </rect>
+          <text text-anchor="middle">sample</text>
+          <text text-anchor="middle" class="t-mono t-muted">N+2</text>
+          </g>
+          <g class="hl-gpu" display="none">
+          <rect width="112" height="32" rx="3">
+          </rect>
+          <text text-anchor="middle">event</text>
+          <text text-anchor="middle" class="t-mono t-muted">sample N+2 done</text>
+          </g>
+          </g>
+          <rect class="b-gpu" x="20" y="196" width="400" height="400" rx="8">
+          </rect>
+          <text class="t-title t-gpu" x="34" y="218">CPU · host memory</text>
+          <rect class="b-gpu" x="560" y="196" width="460" height="400" rx="8">
+          </rect>
+          <text class="t-title t-gpu" x="574" y="218">GPU · device memory</text>
+          <text class="t-tag" x="34" y="238">PINNED BUFFER</text>
+          <text class="t-tag" x="34" y="322">REQUESTS (WHAT THE CPU KNOWS)</text>
+          <text class="t-tag" x="34" y="474">SCHEDULED BATCH · STEP N+2</text>
+          <text class="t-mono t-muted" x="52" y="496" text-anchor="middle">request</text>
+          <text class="t-mono t-muted" x="106" y="496" text-anchor="middle">length</text>
+          <text class="t-mono t-muted" x="188" y="496" text-anchor="middle">GPU memory slots</text>
+          <text class="t-mono t-muted" x="272" y="496" text-anchor="middle">sampling</text>
+          <text class="t-mono t-muted" x="352" y="496" text-anchor="middle">remap</text>
+          <g class="hl-gpu">
+          <text class="t-tag" x="566" y="432">SAMPLED TOKEN IDS · STEP N+1</text>
+          <text class="t-mono t-muted" x="566" y="318" text-anchor="start" display="inline">r1</text>
+          <text class="t-mono t-muted" x="566" y="356" text-anchor="start" display="inline">r2</text>
+          <text class="t-mono t-muted" x="566" y="394" text-anchor="start" display="inline">r3</text>
+          <rect class="b-focus" x="676" y="280" width="172" height="140" rx="6">
+          </rect>
+          <text class="t-tag" x="676" y="272">CUDA GRAPH INPUTS · STEP N+2</text>
+          <text class="t-mono t-muted" x="712" y="296" text-anchor="middle">input_ids</text>
+          <text class="t-mono t-muted" x="764" y="296" text-anchor="middle">pos</text>
+          <text class="t-mono t-muted" x="804" y="296" text-anchor="middle">slots</text>
+          <rect class="b-slot" x="687" y="303" width="50" height="22" rx="4">
+          </rect>
+          <rect class="b-slot" x="687" y="341" width="50" height="22" rx="4">
+          </rect>
+          <rect class="b-slot" x="687" y="379" width="50" height="22" rx="4">
+          </rect>
+          <text class="t-mono t-hot" x="764" y="318" text-anchor="middle" display="inline">4</text>
+          <text class="t-mono t-hot" x="764" y="356" text-anchor="middle" display="inline">3</text>
+          <text class="t-mono t-hot" x="764" y="394" text-anchor="middle" display="none">-1</text>
+          <text class="t-mono t-hot" x="804" y="318" text-anchor="middle" display="inline">[3, 9]</text>
+          <text class="t-mono t-hot" x="804" y="356" text-anchor="middle" display="inline">[7]</text>
+          <text class="t-mono t-hot" x="804" y="394" text-anchor="middle" display="none">
+          </text>
+          <text class="t-mono t-muted" x="838" y="318" text-anchor="middle" display="inline">r1</text>
+          <text class="t-mono t-muted" x="838" y="356" text-anchor="middle" display="inline">r3</text>
+          <text class="t-mono t-muted" x="838" y="394" text-anchor="middle" display="none">
+          </text>
+          <rect class="b-focus" x="862" y="280" width="64" height="140" rx="6">
+          </rect>
+          <text class="t-chip t-hot" x="894" y="340" text-anchor="middle">CUDA graph</text>
+          <text class="t-mono t-muted" x="894" y="354" text-anchor="middle">forward</text>
+          <text class="t-mono t-muted" x="894" y="368" text-anchor="middle">(replay)</text>
+          <rect class="b" x="940" y="280" width="74" height="140" rx="6">
+          </rect>
+          <text class="t-tag" x="940" y="272">OUTPUT</text>
+          <text class="t-mono t-muted" x="977" y="296" text-anchor="middle">hidden state</text>
+          <rect x="950" y="307" width="7" height="14" rx="1" display="inline" class="c-hot">
+          </rect>
+          <rect x="959.5" y="307" width="7" height="14" rx="1" display="inline" class="b-slot">
+          </rect>
+          <rect x="969" y="307" width="7" height="14" rx="1" display="inline" class="b-slot">
+          </rect>
+          <rect x="978.5" y="307" width="7" height="14" rx="1" display="inline" class="b-slot">
+          </rect>
+          <rect x="988" y="307" width="7" height="14" rx="1" display="inline" class="b-slot">
+          </rect>
+          <rect x="997.5" y="307" width="7" height="14" rx="1" display="inline" class="b-slot">
+          </rect>
+          <rect x="950" y="345" width="7" height="14" rx="1" display="inline" class="c-hot">
+          </rect>
+          <rect x="959.5" y="345" width="7" height="14" rx="1" display="inline" class="b-slot">
+          </rect>
+          <rect x="969" y="345" width="7" height="14" rx="1" display="inline" class="b-slot">
+          </rect>
+          <rect x="978.5" y="345" width="7" height="14" rx="1" display="inline" class="b-slot">
+          </rect>
+          <rect x="988" y="345" width="7" height="14" rx="1" display="inline" class="b-slot">
+          </rect>
+          <rect x="997.5" y="345" width="7" height="14" rx="1" display="inline" class="b-slot">
+          </rect>
+          <rect x="950" y="383" width="7" height="14" rx="1" display="none" class="c-hot">
+          </rect>
+          <rect x="959.5" y="383" width="7" height="14" rx="1" display="none" class="b-slot">
+          </rect>
+          <rect x="969" y="383" width="7" height="14" rx="1" display="none" class="b-slot">
+          </rect>
+          <rect x="978.5" y="383" width="7" height="14" rx="1" display="none" class="b-slot">
+          </rect>
+          <rect x="988" y="383" width="7" height="14" rx="1" display="none" class="b-slot">
+          </rect>
+          <rect x="997.5" y="383" width="7" height="14" rx="1" display="none" class="b-slot">
+          </rect>
+          <rect class="b" x="566" y="452" width="206" height="138" rx="6">
+          </rect>
+          <text class="t-tag" x="574" y="467">BATCH DATA (H2D) · STEP N+2</text>
+          <text class="t-mono t-muted" x="586" y="484" text-anchor="middle">req</text>
+          <text class="t-mono t-muted" x="620" y="484" text-anchor="middle">length</text>
+          <text class="t-mono t-muted" x="664" y="484" text-anchor="middle">slots</text>
+          <text class="t-mono t-muted" x="720" y="484" text-anchor="middle">remap</text>
+          <text class="t-mono" x="586" y="501" text-anchor="middle" display="inline">r1</text>
+          <text class="t-mono" x="620" y="501" text-anchor="middle" display="inline">5</text>
+          <text class="t-mono" x="664" y="501" text-anchor="middle" display="inline">[3, 9]</text>
+          <text class="t-mono" x="720" y="501" text-anchor="middle" display="inline">0</text>
+          <text class="t-mono" x="586" y="517" text-anchor="middle" display="inline">r3</text>
+          <text class="t-mono" x="620" y="517" text-anchor="middle" display="inline">4</text>
+          <text class="t-mono" x="664" y="517" text-anchor="middle" display="inline">[7]</text>
+          <text class="t-mono" x="720" y="517" text-anchor="middle" display="inline">2</text>
+          <text class="t-mono" x="586" y="533" text-anchor="middle" display="none">
+          </text>
+          <text class="t-mono" x="620" y="533" text-anchor="middle" display="none">
+          </text>
+          <text class="t-mono" x="664" y="533" text-anchor="middle" display="none">
+          </text>
+          <text class="t-mono" x="720" y="533" text-anchor="middle" display="none">
+          </text>
+          <rect class="b" x="782" y="452" width="230" height="138" rx="6">
+          </rect>
+          <text class="t-tag" x="792" y="467">GPU MEMORY SLOTS (4 TOKENS EACH)</text>
+          <text class="t-mono t-muted" x="804" y="482" text-anchor="middle">0</text>
+          <rect class="b-slot" x="792" y="488" width="24" height="25" rx="3">
+          </rect>
+          <rect x="795" y="491" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="795" y="496.25" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="795" y="501.5" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="795" y="506.75" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <text class="t-mono" x="804" y="525" text-anchor="middle">
+          </text>
+          <text class="t-mono t-muted" x="835" y="482" text-anchor="middle">1</text>
+          <rect class="b-slot" x="823" y="488" width="24" height="25" rx="3">
+          </rect>
+          <rect x="826" y="491" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="826" y="496.25" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="826" y="501.5" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="826" y="506.75" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <text class="t-mono" x="835" y="525" text-anchor="middle">
+          </text>
+          <text class="t-mono t-muted" x="866" y="482" text-anchor="middle">2</text>
+          <rect class="b-slot" x="854" y="488" width="24" height="25" rx="3">
+          </rect>
+          <rect x="857" y="491" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="857" y="496.25" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="857" y="501.5" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="857" y="506.75" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <text class="t-mono" x="866" y="525" text-anchor="middle">
+          </text>
+          <text class="t-mono t-muted" x="897" y="482" text-anchor="middle">3</text>
+          <rect class="b-slot" x="885" y="488" width="24" height="25" rx="3">
+          </rect>
+          <rect x="888" y="491" width="18" height="4" rx="1" class="c-full">
+          </rect>
+          <rect x="888" y="496.25" width="18" height="4" rx="1" class="c-full">
+          </rect>
+          <rect x="888" y="501.5" width="18" height="4" rx="1" class="c-full">
+          </rect>
+          <rect x="888" y="506.75" width="18" height="4" rx="1" class="c-full">
+          </rect>
+          <text class="t-mono" x="897" y="525" text-anchor="middle">r1</text>
+          <text class="t-mono t-muted" x="928" y="482" text-anchor="middle">4</text>
+          <rect class="b-slot" x="916" y="488" width="24" height="25" rx="3">
+          </rect>
+          <rect x="919" y="491" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="919" y="496.25" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="919" y="501.5" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="919" y="506.75" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <text class="t-mono" x="928" y="525" text-anchor="middle">
+          </text>
+          <text class="t-mono t-muted" x="959" y="482" text-anchor="middle">5</text>
+          <rect class="b-slot" x="947" y="488" width="24" height="25" rx="3">
+          </rect>
+          <rect x="950" y="491" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="950" y="496.25" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="950" y="501.5" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="950" y="506.75" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <text class="t-mono" x="959" y="525" text-anchor="middle">
+          </text>
+          <text class="t-mono t-muted" x="990" y="482" text-anchor="middle">6</text>
+          <rect class="b-slot" x="978" y="488" width="24" height="25" rx="3">
+          </rect>
+          <rect x="981" y="491" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="981" y="496.25" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="981" y="501.5" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="981" y="506.75" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <text class="t-mono" x="990" y="525" text-anchor="middle">
+          </text>
+          <text class="t-mono t-muted" x="804" y="538" text-anchor="middle">7</text>
+          <rect class="b-slot" x="792" y="544" width="24" height="25" rx="3">
+          </rect>
+          <rect x="795" y="547" width="18" height="4" rx="1" class="c-full">
+          </rect>
+          <rect x="795" y="552.25" width="18" height="4" rx="1" class="c-full">
+          </rect>
+          <rect x="795" y="557.5" width="18" height="4" rx="1" class="c-full">
+          </rect>
+          <rect x="795" y="562.75" width="18" height="4" rx="1" class="c-hot">
+          </rect>
+          <text class="t-mono t-hot" x="804" y="581" text-anchor="middle">r3</text>
+          <text class="t-mono t-muted" x="835" y="538" text-anchor="middle">8</text>
+          <rect class="b-slot" x="823" y="544" width="24" height="25" rx="3">
+          </rect>
+          <rect x="826" y="547" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="826" y="552.25" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="826" y="557.5" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="826" y="562.75" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <text class="t-mono" x="835" y="581" text-anchor="middle">
+          </text>
+          <text class="t-mono t-muted" x="866" y="538" text-anchor="middle">9</text>
+          <rect class="b-slot" x="854" y="544" width="24" height="25" rx="3">
+          </rect>
+          <rect x="857" y="547" width="18" height="4" rx="1" class="c-hot">
+          </rect>
+          <rect x="857" y="552.25" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="857" y="557.5" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="857" y="562.75" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <text class="t-mono t-hot" x="866" y="581" text-anchor="middle">r1</text>
+          <text class="t-mono t-muted" x="897" y="538" text-anchor="middle">10</text>
+          <rect class="b-slot" x="885" y="544" width="24" height="25" rx="3">
+          </rect>
+          <rect x="888" y="547" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="888" y="552.25" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="888" y="557.5" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="888" y="562.75" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <text class="t-mono" x="897" y="581" text-anchor="middle">
+          </text>
+          <text class="t-mono t-muted" x="928" y="538" text-anchor="middle">11</text>
+          <rect class="b-slot" x="916" y="544" width="24" height="25" rx="3">
+          </rect>
+          <rect x="919" y="547" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="919" y="552.25" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="919" y="557.5" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="919" y="562.75" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <text class="t-mono" x="928" y="581" text-anchor="middle">
+          </text>
+          <text class="t-mono t-muted" x="959" y="538" text-anchor="middle">12</text>
+          <rect class="b-slot" x="947" y="544" width="24" height="25" rx="3">
+          </rect>
+          <rect x="950" y="547" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="950" y="552.25" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="950" y="557.5" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="950" y="562.75" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <text class="t-mono" x="959" y="581" text-anchor="middle">
+          </text>
+          <text class="t-mono t-muted" x="990" y="538" text-anchor="middle">13</text>
+          <rect class="b-slot" x="978" y="544" width="24" height="25" rx="3">
+          </rect>
+          <rect x="981" y="547" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="981" y="552.25" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="981" y="557.5" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <rect x="981" y="562.75" width="18" height="4" rx="1" class="c-empty">
+          </rect>
+          <text class="t-mono" x="990" y="581" text-anchor="middle">
+          </text>
+          <text class="t-mono t-muted" x="230" y="250" text-anchor="middle">r1</text>
+          <text class="t-mono t-muted" x="40" y="350">r1</text>
+          <text class="t-mono t-muted" x="300" y="250" text-anchor="middle">r2</text>
+          <text class="t-mono t-muted" x="40" y="390">r2</text>
+          <text class="t-mono t-muted" x="370" y="250" text-anchor="middle">r3</text>
+          <text class="t-mono t-muted" x="40" y="430">r3</text>
+          <line class="a" x1="556" y1="266" x2="424" y2="266" marker-end="url(#zos-static-ah)">
+          </line>
+          <text class="t-mono t-muted" x="490" y="258" text-anchor="middle">D2H</text>
+          <line class="a" x1="424" y1="516" x2="556" y2="516" marker-end="url(#zos-static-ah)">
+          </line>
+          <text class="t-mono t-muted" x="490" y="508" text-anchor="middle">H2D</text>
+          <line class="a" marker-end="url(#zos-static-ah)" display="inline" x1="637" y1="314" x2="685" y2="314">
+          </line>
+          <line class="a" marker-end="url(#zos-static-ah)" display="inline" x1="637" y1="390" x2="685" y2="352">
+          </line>
+          <line class="a" marker-end="url(#zos-static-ah)" display="none" x1="637" y1="390" x2="685" y2="390">
+          </line>
+          <text class="t-mono t-muted" x="661" y="309" text-anchor="middle" display="inline">row 0</text>
+          <text class="t-mono t-muted" x="661" y="347" text-anchor="middle" display="inline">row 2</text>
+          <text class="t-mono t-muted" x="661" y="385" text-anchor="middle" display="none">row 2</text>
+          <text class="t-mono t-muted" x="661" y="296" text-anchor="middle">D2D</text>
+          <text class="t-mono t-muted" x="760" y="436" text-anchor="start">metadata kernel</text>
+          <line class="a a-hot" x1="849" y1="350" x2="860" y2="350" marker-end="url(#zos-static-ah-gpu)">
+          </line>
+          <line class="a a-hot" x1="927" y1="350" x2="938" y2="350" marker-end="url(#zos-static-ah-gpu)">
+          </line>
+          <line class="a a-hot" x1="894" y1="423" x2="894" y2="449" marker-end="url(#zos-static-ah-gpu)" marker-start="url(#zos-static-ah-gpu)">
+          </line>
+          <text class="t-mono t-hot" x="904" y="436" text-anchor="start">read + write KV</text>
+          <path class="a" d="M977,278 V254 H610 V300" marker-end="url(#zos-static-ah)">
+          </path>
+          <text class="t-mono t-muted" x="775" y="249" text-anchor="middle">sample: hidden state → scores → token id</text>
+          </g>
+          <text class="t-mono t-hot" x="291" y="390" display="inline">finished</text>
+          <g>
+          <g display="inline" opacity="1">
+          <rect rx="4" x="201" y="255" width="58" height="22" class="b">
+          </rect>
+          <text text-anchor="middle" x="230" y="269.5" class="t-chip">279</text>
+          <text text-anchor="middle" class="t-mono t-muted" x="230" y="287" display="inline">the</text>
+          </g>
+          <g display="inline" opacity="0.35">
+          <rect rx="4" x="271" y="255" width="58" height="22" class="b">
+          </rect>
+          <text text-anchor="middle" x="300" y="269.5" class="t-chip">4421</text>
+          <text text-anchor="middle" class="t-mono t-muted" x="300" y="287" display="inline">(unused)</text>
+          </g>
+          <g display="inline" opacity="1">
+          <rect rx="4" x="341" y="255" width="58" height="22" class="b">
+          </rect>
+          <text text-anchor="middle" x="370" y="269.5" class="t-chip">527</text>
+          <text text-anchor="middle" class="t-mono t-muted" x="370" y="287" display="inline">are</text>
+          </g>
+          <g display="inline" opacity="1">
+          <rect rx="4" x="67" y="335" width="50" height="22" class="b">
+          </rect>
+          <text text-anchor="middle" x="92" y="349.5" class="t-chip">The</text>
+          <text text-anchor="middle" class="t-mono t-hot" x="92" y="367" display="none">
+          </text>
+          </g>
+          <g display="inline" opacity="1">
+          <rect rx="4" x="123" y="335" width="50" height="22" class="b">
+          </rect>
+          <text text-anchor="middle" x="148" y="349.5" class="t-chip">cat</text>
+          <text text-anchor="middle" class="t-mono t-hot" x="148" y="367" display="none">
+          </text>
+          </g>
+          <g display="inline" opacity="1">
+          <rect rx="4" x="179" y="335" width="50" height="22" class="b">
+          </rect>
+          <text text-anchor="middle" x="204" y="349.5" class="t-chip">sat</text>
+          <text text-anchor="middle" class="t-mono t-hot" x="204" y="367" display="none">
+          </text>
+          </g>
+          <g display="inline" opacity="1">
+          <rect rx="4" x="235" y="335" width="50" height="22" class="b">
+          </rect>
+          <text text-anchor="middle" x="260" y="349.5" class="t-chip">on</text>
+          <text text-anchor="middle" class="t-mono t-hot" x="260" y="367" display="none">
+          </text>
+          </g>
+          <g display="inline" opacity="1">
+          <rect rx="4" x="291" y="335" width="50" height="22" class="b">
+          </rect>
+          <text text-anchor="middle" x="316" y="349.5" class="t-chip">the</text>
+          <text text-anchor="middle" class="t-mono t-hot" x="316" y="367" display="none">
+          </text>
+          </g>
+          <g display="inline" opacity="1">
+          <rect rx="4" x="347" y="335" width="50" height="22" class="b-out">
+          </rect>
+          <text text-anchor="middle" x="372" y="349.5" class="t-chip t-muted">N+2</text>
+          <text text-anchor="middle" class="t-mono t-hot" x="372" y="367" display="none">
+          </text>
+          </g>
+          <g display="inline" opacity="1">
+          <rect rx="4" x="67" y="375" width="50" height="22" class="b">
+          </rect>
+          <text text-anchor="middle" x="92" y="389.5" class="t-chip">I</text>
+          <text text-anchor="middle" class="t-mono t-hot" x="92" y="407" display="none">
+          </text>
+          </g>
+          <g display="inline" opacity="1">
+          <rect rx="4" x="123" y="375" width="50" height="22" class="b">
+          </rect>
+          <text text-anchor="middle" x="148" y="389.5" class="t-chip">like</text>
+          <text text-anchor="middle" class="t-mono t-hot" x="148" y="407" display="none">
+          </text>
+          </g>
+          <g display="inline" opacity="1">
+          <rect rx="4" x="179" y="375" width="50" height="22" class="b">
+          </rect>
+          <text text-anchor="middle" x="204" y="389.5" class="t-chip">green</text>
+          <text text-anchor="middle" class="t-mono t-hot" x="204" y="407" display="none">
+          </text>
+          </g>
+          <g display="inline" opacity="1">
+          <rect rx="4" x="235" y="375" width="50" height="22" class="b">
+          </rect>
+          <text text-anchor="middle" x="260" y="389.5" class="t-chip">&lt;eos&gt;</text>
+          <text text-anchor="middle" class="t-mono t-hot" x="260" y="407" display="none">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="inline" opacity="1">
+          <rect rx="4" x="67" y="415" width="50" height="22" class="b">
+          </rect>
+          <text text-anchor="middle" x="92" y="429.5" class="t-chip">Hi</text>
+          <text text-anchor="middle" class="t-mono t-hot" x="92" y="447" display="none">
+          </text>
+          </g>
+          <g display="inline" opacity="1">
+          <rect rx="4" x="123" y="415" width="50" height="22" class="b">
+          </rect>
+          <text text-anchor="middle" x="148" y="429.5" class="t-chip">there</text>
+          <text text-anchor="middle" class="t-mono t-hot" x="148" y="447" display="none">
+          </text>
+          </g>
+          <g display="inline" opacity="1">
+          <rect rx="4" x="179" y="415" width="50" height="22" class="b">
+          </rect>
+          <text text-anchor="middle" x="204" y="429.5" class="t-chip">how</text>
+          <text text-anchor="middle" class="t-mono t-hot" x="204" y="447" display="none">
+          </text>
+          </g>
+          <g display="inline" opacity="1">
+          <rect rx="4" x="235" y="415" width="50" height="22" class="b">
+          </rect>
+          <text text-anchor="middle" x="260" y="429.5" class="t-chip">are</text>
+          <text text-anchor="middle" class="t-mono t-hot" x="260" y="447" display="none">
+          </text>
+          </g>
+          <g display="inline" opacity="1">
+          <rect rx="4" x="291" y="415" width="50" height="22" class="b-out">
+          </rect>
+          <text text-anchor="middle" x="316" y="429.5" class="t-chip t-muted">N+2</text>
+          <text text-anchor="middle" class="t-mono t-hot" x="316" y="447" display="none">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="inline" opacity="1">
+          <rect rx="4" x="34" y="505" width="36" height="22" class="b">
+          </rect>
+          <text text-anchor="middle" x="52" y="519.5" class="t-chip">r1</text>
+          <text text-anchor="middle" class="t-mono t-muted" x="52" y="537" display="none">
+          </text>
+          </g>
+          <g display="none" opacity="1">
+          <rect rx="4" x="34" y="533" width="36" height="22" class="b">
+          </rect>
+          <text text-anchor="middle" x="52" y="547.5" class="t-chip">r2</text>
+          <text text-anchor="middle" class="t-mono t-muted" x="52" y="565" display="none">
+          </text>
+          </g>
+          <g display="inline" opacity="1">
+          <rect rx="4" x="34" y="533" width="36" height="22" class="b">
+          </rect>
+          <text text-anchor="middle" x="52" y="547.5" class="t-chip">r3</text>
+          <text text-anchor="middle" class="t-mono t-muted" x="52" y="565" display="none">
+          </text>
+          </g>
+          </g>
+          <g class="hl-gpu">
+          <g display="inline" opacity="1">
+          <rect rx="4" x="585" y="303" width="50" height="22" class="b">
+          </rect>
+          <text text-anchor="middle" x="610" y="317.5" class="t-chip">279</text>
+          <text text-anchor="middle" class="t-mono t-muted" x="610" y="335" display="inline">the</text>
+          </g>
+          <g display="inline" opacity="1">
+          <rect rx="4" x="585" y="341" width="50" height="22" class="b">
+          </rect>
+          <text text-anchor="middle" x="610" y="355.5" class="t-chip">4421</text>
+          <text text-anchor="middle" class="t-mono t-muted" x="610" y="373" display="inline">(unused)</text>
+          </g>
+          <g display="inline" opacity="1">
+          <rect rx="4" x="585" y="379" width="50" height="22" class="b">
+          </rect>
+          <text text-anchor="middle" x="610" y="393.5" class="t-chip">527</text>
+          <text text-anchor="middle" class="t-mono t-muted" x="610" y="411" display="inline">are</text>
+          </g>
+          <g display="inline" opacity="1">
+          <rect rx="4" x="687" y="303" width="50" height="22" class="b-focus">
+          </rect>
+          <text text-anchor="middle" x="712" y="317.5" class="t-chip t-hot">279</text>
+          <text text-anchor="middle" class="t-mono t-muted" x="712" y="335" display="inline">the</text>
+          </g>
+          <g display="inline" opacity="1">
+          <rect rx="4" x="687" y="341" width="50" height="22" class="b-focus">
+          </rect>
+          <text text-anchor="middle" x="712" y="355.5" class="t-chip t-hot">527</text>
+          <text text-anchor="middle" class="t-mono t-muted" x="712" y="373" display="inline">are</text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          </g>
+          <text class="t-mono" x="106" y="520" text-anchor="middle" display="inline">5</text>
+          <text class="t-mono" x="188" y="520" text-anchor="middle" display="inline" opacity="1">[3, 9]</text>
+          <text class="t-mono" x="272" y="520" text-anchor="middle" display="inline" opacity="1">temp 0.7</text>
+          <text class="t-mono" x="352" y="520" text-anchor="middle" display="inline">0</text>
+          <text class="t-mono" x="106" y="520" text-anchor="middle" display="none">5</text>
+          <text class="t-mono" x="188" y="520" text-anchor="middle" display="none" opacity="0">[4, 11]</text>
+          <text class="t-mono" x="272" y="520" text-anchor="middle" display="none" opacity="0">temp 1.0</text>
+          <text class="t-mono" x="352" y="520" text-anchor="middle" display="none">1</text>
+          <text class="t-mono" x="106" y="548" text-anchor="middle" display="inline">4</text>
+          <text class="t-mono" x="188" y="548" text-anchor="middle" display="inline" opacity="1">[7]</text>
+          <text class="t-mono" x="272" y="548" text-anchor="middle" display="inline" opacity="1">greedy</text>
+          <text class="t-mono" x="352" y="548" text-anchor="middle" display="inline">2</text>
+          <g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          </g>
+          <g class="hl-gpu">
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          <g display="none">
+          <rect rx="4">
+          </rect>
+          <text text-anchor="middle">
+          </text>
+          <text text-anchor="middle" class="t-mono t-muted">
+          </text>
+          </g>
+          </g>
+        </svg>
+        </div>
+        <figcaption>
+          Three requests (r1–r3) without multi-token prediction. Durations are schematic, not measured. A dashed box is
+          work in the CUDA stream that the GPU hasn't started yet. Token ids are illustrative; the word under each id is
+          only for reading. As a simplification, the requests show text, though the CPU stores token ids there too. The
+          GPU memory slots and sampling settings in the scheduled batch are illustrative; here a slot holds 4 tokens. The order of work follows DeepInfer's
+          <code>Worker.execute_model_step</code> (<code>deepinfer/worker/worker.py</code>). Use the step buttons to move
+          one step at a time. Switch to <em>Without ZOS</em> to see normal scheduling: the CPU works on one step at a
+          time, the GPU sits idle while it post-processes, schedules and prepares, and the same two steps (N and N+1)
+          finish at 26.5 time units instead of 16.
+        </figcaption>
+      </figure>
+
+      <h4>Variables in the animation</h4>
+      <p>Everything shown in the two memory boxes, and the event in the CUDA stream.</p>
+      <div class="table-wrap">
+        <table>
+          <colgroup><col style="width: 13rem"><col></colgroup>
+          <thead><tr><th>Name in the figure</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td>Pinned buffer</td><td>CPU memory the GPU can copy into directly. Holds the token ids from the latest sample, copied over by D2H. Post-process reads them from here.</td></tr>
+            <tr><td>Requests</td><td>Each request's tokens so far, as the CPU knows them. Shown as text; the CPU stores token ids. A dashed box is a token already scheduled to be produced but not on the CPU yet, labelled with the step that produces it.</td></tr>
+            <tr><td>Scheduled batch</td><td>The requests the CPU picked for the next step, one row each. Written by schedule; remap is added by prep. Holds no tokens.</td></tr>
+            <tr><td>length</td><td>How many tokens the step reads for that request: the tokens on the CPU, plus the step's input token, which the CPU doesn't have yet. r1 in step N+1: The, cat, sat, N = 4.</td></tr>
+            <tr><td>GPU memory slots</td><td>Where the request's earlier results are kept in GPU memory, so the step doesn't redo the earlier tokens (the block table in the code). Here a slot holds the results of 4 tokens, so a request needs length ÷ 4 slots, rounded up. When the length passes a multiple of 4, schedule gives the request a free slot: r1 has [3] at length 4 and [3, 9] at length 5. The grid on the GPU side shows each slot's 4 cells (grey: results stored; blue: being stored by forward) and the request that owns it. Slot numbers are illustrative.</td></tr>
+            <tr><td>sampling</td><td>How to pick the request's next token: a temperature, or greedy (always the most likely token). Illustrative.</td></tr>
+            <tr><td>remap</td><td>With ZOS only. The request's row in the previous step's batch. Prep finds it by comparing the two batches. The GPU uses it to find the request's input token among the previous step's sampled token ids: on the GPU side, each D2D arrow reads the sampled row that remap names ("row 0").</td></tr>
+            <tr><td>input</td><td>Without ZOS only, in place of remap. The request's input token id (the word under it is only for reading), which the CPU already has because it post-processed the previous step before scheduling this one. Prep adds it to the scheduled batch, and H2D copies it straight into <code>input_ids</code>; there is no D2D gather.</td></tr>
+            <tr><td>Sampled token ids</td><td>The token ids the latest sample picked, one row per request of that step's batch. They stay in GPU memory, where the next step's gather reads them, and are also copied to the pinned buffer (D2H).</td></tr>
+            <tr><td>Batch data (H2D)</td><td>The scheduled batch's lengths, slots and remap, copied to the GPU by H2D, one row per request.</td></tr>
+            <tr><td>CUDA graph</td><td>Forward's kernels, recorded once with fixed GPU buffers as their inputs and output. Each step replays the recording, so forward always reads the same input buffers (the placeholders below) and writes the same output buffer. Forward reads the input placeholders and the earlier keys and values in the GPU memory slots, stores the input token's keys and values in the slots, and writes the output.</td></tr>
+            <tr><td>CUDA graph inputs</td><td>The graph's fixed input buffers, one row per request of the step that runs next. A row keeps its old value until this step's copy overwrites it. The step's inputs block fills them in three copies: H2D brings the batch data in, the metadata kernel writes <em>pos</em> and <em>slots</em> from it, and the gather (D2D) writes <em>input_ids</em>.</td></tr>
+            <tr><td><code>input_ids</code></td><td>The request's input token: the token the previous step sampled for it. The gather copies it from the sampled token ids, from the row remap names.</td></tr>
+            <tr><td>pos</td><td>Where the input token sits in its request, counting from 0 (length − 1).</td></tr>
+            <tr><td>slots (graph input)</td><td>The request's GPU memory slots, copied from the batch data, so forward knows where the request's keys and values live.</td></tr>
+            <tr><td>Output (hidden state)</td><td>The graph's fixed output buffer: one hidden state per request, the model's final list of numbers for the input token. Sample turns it into a score for every possible next token and picks one.</td></tr>
+            <tr><td>event</td><td>A marker the CPU adds to the CUDA stream after each sample. "Wait for sample N" ends when the GPU reaches it.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
